@@ -1,0 +1,32 @@
+{
+    "name": "Sample Population Data",
+    "description": "Synthetic dataflow for plugin testing. Excel source + Combine Files pattern + UnpivotOtherColumns. Exercises HIGH RISK markers (Excel.Workbook, AzureStorage.Blobs, custom M function). No real credentials embedded.",
+    "version": "1.0",
+    "culture": "en-GB",
+    "modifiedTime": "2026-05-01T12:00:00.0000000+00:00",
+    "ppdf:outputFileFormat": "Csv",
+    "pbi:mashup": {
+        "fastCombine": false,
+        "allowNativeQueries": false,
+        "queriesMetadata": {
+            "Population Estimates 2020": {
+                "queryId": "00000000-0000-0000-0000-000000000003",
+                "queryName": "Population Estimates 2020",
+                "loadEnabled": true
+            },
+            "Population Trend": {
+                "queryId": "00000000-0000-0000-0000-000000000004",
+                "queryName": "Population Trend",
+                "loadEnabled": true
+            },
+            "Parameter": {
+                "queryId": "00000000-0000-0000-0000-000000000005",
+                "queryName": "Parameter",
+                "loadEnabled": false
+            }
+        },
+        "document": "section Section1;\r\nshared #\"Population Estimates 2020\" = let\r\n  Source = AzureStorage.Blobs(\"https://samplestorage.blob.core.windows.net/\"),\r\n  Navigation = Source{[Name = \"sample\"]}[Data],\r\n  #\"Filtered rows\" = Table.SelectRows(Navigation, each [Extension] = \".xlsx\" and Text.Contains([Name], \"population_2020\")),\r\n  #\"Navigation 1\" = #\"Filtered rows\"{[#\"Folder Path\" = \"https://samplestorage.blob.core.windows.net/sample/Population/\", Name = \"population_2020.xlsx\"]}[Content],\r\n  #\"Imported Excel\" = Excel.Workbook(#\"Navigation 1\", null, true),\r\n  #\"Sheet1 sheet\" = #\"Imported Excel\"{[Item = \"Mid-2020 Persons\", Kind = \"Sheet\"]}[Data],\r\n  #\"Skipped rows\" = Table.Skip(#\"Sheet1 sheet\", 4),\r\n  #\"Promoted headers\" = Table.PromoteHeaders(#\"Skipped rows\", [PromoteAllScalars = true]),\r\n  #\"Unpivoted other columns\" = Table.UnpivotOtherColumns(#\"Promoted headers\", {\"LSOA Code\", \"LA Name\"}, \"Age Group\", \"Population\")\r\nin\r\n  #\"Unpivoted other columns\";\r\nshared #\"Population Trend\" = let\r\n  Source = AzureStorage.Blobs(\"https://samplestorage.blob.core.windows.net/\"),\r\n  Navigation = Source{[Name = \"sample\"]}[Data],\r\n  #\"Filtered rows\" = Table.SelectRows(Navigation, each [Extension] = \".csv\" and [Name] = \"Population/population_trend.csv\"),\r\n  #\"Navigation 1\" = #\"Filtered rows\"{[#\"Folder Path\" = \"https://samplestorage.blob.core.windows.net/sample/\", Name = \"Population/population_trend.csv\"]}[Content],\r\n  #\"Imported CSV\" = Csv.Document(#\"Navigation 1\", [Delimiter = \",\", Encoding = 65001, QuoteStyle = QuoteStyle.None]),\r\n  #\"Promoted headers\" = Table.PromoteHeaders(#\"Imported CSV\", [PromoteAllScalars = true]),\r\n  #\"Unpivoted other columns\" = Table.UnpivotOtherColumns(#\"Promoted headers\", {\"LSOA Code\", \"LA Name\"}, \"Year\", \"Value\"),\r\n  #\"Renamed columns\" = Table.RenameColumns(#\"Unpivoted other columns\", {{\"Value\", \"Population Count\"}})\r\nin\r\n  #\"Renamed columns\";\r\nshared Parameter = \"sample\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true];\r\n",
+        "connectionOverrides": []
+    },
+    "annotations": []
+}

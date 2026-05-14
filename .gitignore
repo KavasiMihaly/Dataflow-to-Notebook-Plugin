@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude / agent runtime artifacts
+_Agent Logs/
+.claude/
+
+# Plugin build artifacts (none yet)
+
+# Sample-run output (when users test --sample mode in the plugin repo itself)
+3 - Notebooks/
+1 - Documentation/
+2 - Source Files/

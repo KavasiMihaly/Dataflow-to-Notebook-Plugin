@@ -1,0 +1,27 @@
+{
+    "name": "Sample Education Data",
+    "description": "Synthetic dataflow for plugin testing. CSV source, two output entities, includes a NestedJoin and a conditional column for risk-pattern coverage. No real workspace credentials embedded.",
+    "version": "1.0",
+    "culture": "en-GB",
+    "modifiedTime": "2026-05-01T12:00:00.0000000+00:00",
+    "ppdf:outputFileFormat": "Csv",
+    "pbi:mashup": {
+        "fastCombine": false,
+        "allowNativeQueries": false,
+        "queriesMetadata": {
+            "Schools": {
+                "queryId": "00000000-0000-0000-0000-000000000001",
+                "queryName": "Schools",
+                "loadEnabled": true
+            },
+            "Ofsted Rating": {
+                "queryId": "00000000-0000-0000-0000-000000000002",
+                "queryName": "Ofsted Rating",
+                "loadEnabled": true
+            }
+        },
+        "document": "section Section1;\r\nshared Schools = let\r\n  Source = AzureStorage.Blobs(\"https://samplestorage.blob.core.windows.net/\"),\r\n  Navigation = Source{[Name = \"sample\"]}[Data],\r\n  #\"Filtered rows\" = Table.SelectRows(Navigation, each [Extension] = \".csv\" and [Name] = \"Education/schools_sample.csv\"),\r\n  #\"Navigation 1\" = #\"Filtered rows\"{[#\"Folder Path\" = \"https://samplestorage.blob.core.windows.net/sample/\", Name = \"Education/schools_sample.csv\"]}[Content],\r\n  #\"Imported CSV\" = Csv.Document(#\"Navigation 1\", [Delimiter = \",\", Columns = 5, Encoding = 65001, QuoteStyle = QuoteStyle.None]),\r\n  #\"Promoted headers\" = Table.PromoteHeaders(#\"Imported CSV\", [PromoteAllScalars = true]),\r\n  #\"Renamed columns\" = Table.RenameColumns(#\"Promoted headers\", {{\"URN\", \"School ID\"}, {\"SCHNAME\", \"School Name\"}}),\r\n  #\"Changed column type\" = Table.TransformColumnTypes(#\"Renamed columns\", {{\"School ID\", Int64.Type}, {\"School Name\", type text}}),\r\n  #\"Merged queries\" = Table.NestedJoin(#\"Changed column type\", {\"School ID\"}, #\"Ofsted Rating\", {\"URN\"}, \"Ofsted Rating\", JoinKind.LeftOuter),\r\n  #\"Expanded Ofsted Rating\" = Table.ExpandTableColumn(#\"Merged queries\", \"Ofsted Rating\", {\"Rating\"}, {\"Ofsted Rating\"}),\r\n  #\"Added custom\" = Table.AddColumn(#\"Expanded Ofsted Rating\", \"Ofsted Rank\", each if [Ofsted Rating] = \"Outstanding\" then 1 else if [Ofsted Rating] = \"Good\" then 2 else if [Ofsted Rating] = \"Requires improvement\" then 3 else null)\r\nin\r\n  #\"Added custom\";\r\nshared #\"Ofsted Rating\" = let\r\n  Source = AzureStorage.Blobs(\"https://samplestorage.blob.core.windows.net/\"),\r\n  Navigation = Source{[Name = \"sample\"]}[Data],\r\n  #\"Filtered rows\" = Table.SelectRows(Navigation, each [Extension] = \".csv\" and [Name] = \"Education/ofsted_sample.csv\"),\r\n  #\"Navigation 1\" = #\"Filtered rows\"{[#\"Folder Path\" = \"https://samplestorage.blob.core.windows.net/sample/\", Name = \"Education/ofsted_sample.csv\"]}[Content],\r\n  #\"Imported CSV\" = Csv.Document(#\"Navigation 1\", [Delimiter = \",\", Columns = 2, Encoding = 65001, QuoteStyle = QuoteStyle.None]),\r\n  #\"Promoted headers\" = Table.PromoteHeaders(#\"Imported CSV\", [PromoteAllScalars = true])\r\nin\r\n  #\"Promoted headers\";\r\n",
+        "connectionOverrides": []
+    },
+    "annotations": []
+}

@@ -1,0 +1,3 @@
+dataflow_name,query_count,output_entities,helpers,risk_patterns
+Sample Education Data,2,2,0,"RISK-01 (AzureStorage.Blobs), RISK-10 (NestedJoin), RISK-11 (conditional column)"
+Sample Population Data,3,2,1,"RISK-01 (AzureStorage.Blobs), RISK-03 (Excel.Workbook), RISK-04 (Table.Skip), RISK-05 (UnpivotOtherColumns)"

@@ -1,0 +1,143 @@
+{
+  "name": "fabric-dataflow-migration-toolkit",
+  "version": "0.1.0",
+  "description": "End-to-end Power BI Dataflow Gen1 to Microsoft Fabric medallion notebook migration. Export, analyze, generate bronze/silver PySpark notebooks, deploy, and validate in Fabric.",
+  "author": {
+    "name": "Mihaly Kavasi",
+    "email": "kavasi.mihaly@onedaybi.com",
+    "url": "https://github.com/KavasiMihaly"
+  },
+  "homepage": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
+  "repository": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
+  "license": "MIT",
+  "keywords": [
+    "fabric",
+    "power-bi",
+    "dataflow",
+    "medallion",
+    "pyspark",
+    "migration",
+    "lakehouse",
+    "delta-lake",
+    "data-engineering"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/validate-fabric-structure.py",
+            "statusMessage": "Validating Fabric notebook structure..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/approve-plugin-bash.py",
+            "statusMessage": "Checking plugin Bash allowlist..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-config-check.py"
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/create-worktree.py"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/remove-worktree.py"
+          }
+        ]
+      }
+    ]
+  },
+  "userConfig": {
+    "fabric_workspace_id": {
+      "title": "Fabric Workspace ID",
+      "description": "GUID of the target Fabric workspace where notebooks will be deployed. Find it in the Fabric portal URL.",
+      "type": "string",
+      "sensitive": false
+    },
+    "fabric_workspace_name": {
+      "title": "Fabric Workspace Name",
+      "description": "Display name of the target Fabric workspace (e.g., 'Analytics Dev').",
+      "type": "string",
+      "sensitive": false
+    },
+    "source_workspace_id": {
+      "title": "Source Power BI Workspace ID",
+      "description": "GUID of the Power BI workspace containing the Dataflow Gen1 dataflows to migrate. Leave empty to specify at runtime.",
+      "type": "string",
+      "sensitive": false
+    },
+    "bronze_lakehouse": {
+      "title": "Bronze Lakehouse Name",
+      "description": "Name of the bronze layer lakehouse (raw ingestion). Default: lh_bronze",
+      "type": "string",
+      "sensitive": false
+    },
+    "silver_lakehouse": {
+      "title": "Silver Lakehouse Name",
+      "description": "Name of the silver layer lakehouse (cleaned/conformed). Default: lh_silver",
+      "type": "string",
+      "sensitive": false
+    },
+    "gold_lakehouse": {
+      "title": "Gold Lakehouse Name",
+      "description": "Name of the gold layer lakehouse (business-ready). Default: lh_gold",
+      "type": "string",
+      "sensitive": false
+    },
+    "azure_tenant_id": {
+      "title": "Azure Tenant ID",
+      "description": "Azure Entra ID tenant ID. Required for service principal auth; leave empty for interactive auth.",
+      "type": "string",
+      "sensitive": false
+    },
+    "azure_client_id": {
+      "title": "Azure Client ID",
+      "description": "Azure Entra ID client/application ID. Required for service principal auth.",
+      "type": "string",
+      "sensitive": false
+    },
+    "azure_client_secret": {
+      "title": "Azure Client Secret",
+      "description": "Azure Entra ID client secret. Stored in system keychain. Required for service principal auth.",
+      "type": "string",
+      "sensitive": true
+    },
+    "report_unknown_patterns": {
+      "title": "Share unknown M patterns with the plugin author?",
+      "description": "When the m-query-analyst detects an M pattern not in the plugin's risk catalog, should the plugin (with explicit per-pattern preview + approval) file a GitHub issue against the plugin repo so the pattern can be added to a future release? Values: 'never' (default — patterns recorded only in your local _Documentation/conversion-backlog.md), 'ask' (migration-analyst asks each run), 'always' (auto-prompt the report-unknown-patterns skill at Stage 13 with sanitization preview). Connection strings, GUIDs, file paths, and sheet names are auto-redacted before any issue is filed; you still review and approve each pattern individually.",
+      "type": "string",
+      "sensitive": false
+    }
+  }
+}
