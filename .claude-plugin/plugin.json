@@ -7,8 +7,8 @@
     "email": "kavasi.mihaly@onedaybi.com",
     "url": "https://github.com/KavasiMihaly"
   },
-  "homepage": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
-  "repository": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
+  "homepage": "https://github.com/KavasiMihaly/Dataflow-to-Notebook-Plugin",
+  "repository": "https://github.com/KavasiMihaly/Dataflow-to-Notebook-Plugin",
   "license": "MIT",
   "keywords": [
     "fabric",

@@ -331,14 +331,14 @@ Four validation layers:
 ## Development
 
 ```bash
-git clone https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin.git
-cd Fabric-Dataflow-Migration-Plugin
+git clone https://github.com/KavasiMihaly/Dataflow-to-Notebook-Plugin.git
+cd Dataflow-to-Notebook-Plugin
 ```
 
 Point Claude Code at your local checkout:
 
 ```
-/plugin marketplace add /absolute/path/to/Fabric-Dataflow-Migration-Plugin
+/plugin marketplace add /absolute/path/to/Dataflow-to-Notebook-Plugin
 ```
 
 After editing agents/skills/hooks, run `/reload-plugins`.

@@ -99,8 +99,8 @@ Mapping these to specialized subagents is the same pattern that worked for the d
   "version": "0.1.0",
   "description": "End-to-end Power BI Dataflow Gen1 to Fabric medallion notebook migration. Export, analyze, generate bronze/silver PySpark notebooks, deploy, and validate.",
   "author": { "name": "Mihaly Kavasi", "email": "kavasi.mihaly@onedaybi.com" },
-  "homepage": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
-  "repository": "https://github.com/KavasiMihaly/Fabric-Dataflow-Migration-Plugin",
+  "homepage": "https://github.com/KavasiMihaly/Dataflow-to-Notebook-Plugin",
+  "repository": "https://github.com/KavasiMihaly/Dataflow-to-Notebook-Plugin",
   "license": "MIT",
   "keywords": ["fabric", "power-bi", "dataflow", "medallion", "pyspark", "migration"],
   "hooks": {
