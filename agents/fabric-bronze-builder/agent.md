@@ -9,7 +9,6 @@ description: >
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: haiku
 color: purple
-isolation: worktree
 maxTurns: 80
 memory: project
 skills: fabric-dataflow-migration-toolkit:fabric-cli-runner, fabric-dataflow-migration-toolkit:fabric-lakehouse-reader, fabric-dataflow-migration-toolkit:m-to-pyspark-converter

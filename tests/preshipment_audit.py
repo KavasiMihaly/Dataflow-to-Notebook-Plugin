@@ -249,8 +249,6 @@ def gate_required_files(findings: list[dict]) -> bool:
         "hooks/approve-plugin-bash.py",
         "hooks/validate-fabric-structure.py",
         "hooks/session-start-config-check.py",
-        "hooks/create-worktree.py",
-        "hooks/remove-worktree.py",
         "reference/pyspark-style-guide.md",
         "reference/notebook-template.md",
         "reference/delta-lake-patterns.md",

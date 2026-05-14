@@ -32,7 +32,7 @@ Microsoft [marked Dataflow Gen1 as Legacy in April 2026](https://powerbi.microso
 
 - **6 Agents** — orchestrator, mechanical M analyst, interactive migration analyst, bronze + silver builders, end-to-end validator
 - **9 Skills** — Dataflow Gen1 extractor, M-to-PySpark converter, Fabric CLI runner, lakehouse reader, project initializer, data profiler, notebook deployer, pre-flight check, **opt-in pattern-sharing reporter**
-- **5 Hooks** — Bash auto-approval for plugin scripts, structural validation, worktree create/remove, session-start config check
+- **3 Hooks** — Bash auto-approval for plugin scripts, structural validation, session-start config check
 - **Orchestrator-as-main-agent launch** — single `claude --agent ...` invocation drives the full 13-stage pipeline
 - **Dry-run mode** — full pipeline without Fabric access, using bundled sample dataflows
 - **12 documented M-conversion risk patterns** — best-effort PySpark output with explicit human-review markers
@@ -237,7 +237,6 @@ claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:f
 - **PreToolUse Write/Edit** — `validate-fabric-structure.py` enforces `.ipynb` format, `read_bronze()`-only contract, lakehouse binding
 - **PreToolUse Bash** — `approve-plugin-bash.py` auto-approves plugin-internal commands (plugin-shipped Python scripts, `fab` CLI, etc.)
 - **SessionStart** — `session-start-config-check.py` detects missing config and prints setup banner
-- **WorktreeCreate / Remove** — manage isolated build worktrees during parallel notebook generation
 
 ---
 

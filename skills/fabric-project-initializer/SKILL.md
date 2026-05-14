@@ -77,8 +77,6 @@ ProjectName/
 │   ├── utilities/                  # Shared utility notebooks
 │   │   └── nb_utils_config.py      # Configuration utility template
 │   └── orchestration/              # Pipeline orchestration notebooks
-├── 4 - Semantic Layer/             # Power BI TMDL
-├── 5 - Report Building/            # Power BI reports
 ├── 6 - Agentic Resources/
 │   └── reference/                  # Copied Fabric reference materials
 │       ├── pyspark-style-guide.md
@@ -86,7 +84,6 @@ ProjectName/
 │       ├── delta-lake-patterns.md
 │       ├── fabric-testing-patterns.md
 │       └── examples/
-├── 7 - Data Exports/               # Query results
 ├── .gitignore                      # Fabric-specific ignore patterns
 └── CLAUDE.md                       # Project-specific agent config
 ```

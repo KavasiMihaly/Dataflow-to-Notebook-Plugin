@@ -250,18 +250,24 @@ Task(
 
 When complete, read the JSON envelope and write Section 3 of `migration-design.md`.
 
-### Stage 5 — Refactor Decisions (User Touchpoint 2, foreground)
+### Stage 5 — Refactor Decisions (User Touchpoint 2, MUST be foreground)
 
-Spawn `migration-analyst` foreground:
+**CRITICAL: this stage MUST be foreground. The migration-analyst calls `AskUserQuestion`, and a background subagent has no user channel — its `AskUserQuestion` calls silently no-op and you would get back defaults the user never picked. If you find yourself considering `run_in_background: true` here because Stages 3 and 4 used it, STOP. Stages 3 and 4 are non-interactive mechanical analysis; Stage 5 is interactive Q&A. They are different stages with different requirements.**
+
+**Hard requirement:** the user MUST answer at least two questions at this stage (refactor strictness + naming are always asked by the analyst). If you reach Stage 6 without `AskUserQuestion` having fired, you have a bug — re-spawn the analyst correctly.
+
+Spawn `migration-analyst` in foreground with an explicit `run_in_background: false`:
 
 ```
 Task(
   subagent_type: "fabric-dataflow-migration-toolkit:migration-analyst:migration-analyst",
   prompt: "Read '1 - Documentation/m-analysis-inventory.json' and '1 - Documentation/m-analysis-risks.json'. Determine which refactor questions apply to this workspace's discovered patterns (only ask about Excel if Excel sources exist, only ask about Combine Files if helpers detected, only ask about AzureStorage if blob URIs found, only ask about API if web sources found). Ask 3-4 dynamic questions via AskUserQuestion. Write Sections 1 (Migration Goals) and 5 (Refactor Decisions) of '1 - Documentation/migration-design.md'.",
-  // foreground — needs AskUserQuestion access
+  run_in_background: false,
   mode: "acceptEdits"
 )
 ```
+
+After it returns, verify the analyst actually asked questions: read `1 - Documentation/migration-design.md` Section 5 and confirm the values were chosen (not blank or all defaults). If Section 5 is missing or only contains default placeholder text, the analyst ran but `AskUserQuestion` did not fire — halt with an error rather than silently proceeding to Stage 6.
 
 After it returns, derive the Medallion Mapping (Section 6) yourself by combining the inventory with refactor decisions:
 
@@ -272,9 +278,9 @@ After it returns, derive the Medallion Mapping (Section 6) yourself by combining
 
 Write Sections 6, 7 (Bronze Build Plan), 8 (Silver Build Plan).
 
-### Stage 6 — Plan Approval (User Touchpoint 3, plan mode)
+### Stage 6 — Design Approval (User Touchpoint 3, AskUserQuestion)
 
-Enter native plan mode. Present a summary leading with the **migration outcome**:
+**This orchestrator does not have the `EnterPlanMode` tool — do not attempt to enter native plan mode.** Use `AskUserQuestion` instead. Print the full migration outcome as a text block to the user FIRST so they have the context, then issue the approval prompt:
 
 ```markdown
 ## Migration Outcome
@@ -297,7 +303,28 @@ Enter native plan mode. Present a summary leading with the **migration outcome**
 {Dry run: notebooks generated locally, no Fabric deploy | Full: deploy + run + validate}
 ```
 
-Native plan mode shows this for approval. On approval, set Section 0 status to `Approved` and proceed to Stage 7. On revision, return to Stage 5.
+Then ask:
+
+```
+AskUserQuestion(
+  questions: [{
+    question: "Approve this migration design and proceed to notebook generation?",
+    header: "Approval",
+    multiSelect: false,
+    options: [
+      { label: "Approve and proceed", description: "Lock in the design, set Section 0 status to Approved, run Stages 7-13" },
+      { label: "Revise refactor decisions", description: "Re-enter Stage 5 to change refactor choices, then re-show this approval" },
+      { label: "Abort", description: "Stop here. Design doc is preserved for inspection; no notebooks will be generated." }
+    ]
+  }]
+)
+```
+
+On `Approve and proceed`: set Section 0 status to `Approved` and proceed to Stage 7.
+On `Revise refactor decisions`: return to Stage 5 — re-spawn `migration-analyst` foreground; after it writes new decisions, re-render Sections 6/7/8 and re-show this approval.
+On `Abort`: write `Status: Aborted by user at Stage 6 approval` into Section 11 (Design Decisions Log), print a final message pointing at the design doc location, and stop. Do NOT proceed to Stage 7.
+
+**Do not silently skip this approval.** If `AskUserQuestion` fails or you have no user channel (e.g. you were incorrectly spawned as a subagent), halt with an error message — never default to "Approve and proceed".
 
 ### Stage 7 — Project Scaffolding (skip if incremental mode)
 
@@ -315,7 +342,7 @@ ls "0 - Architecture Setup/project-config.yml"
 
 ### Stage 8 — Build Bronze Notebooks (parallel fan-out)
 
-For each query in Section 6 with layer = `bronze`, spawn a `fabric-bronze-builder` in background. Each builder gets its own worktree to avoid file collisions.
+For each query in Section 6 with layer = `bronze`, spawn a `fabric-bronze-builder` in background. Each builder writes to a unique `nb_bronze_<query>.ipynb` filename in the shared `3 - Notebooks/bronze/` directory — no file-collision risk because each builder handles a different query.
 
 ```
 Task(
@@ -338,19 +365,18 @@ Task(
 
   Return JSON envelope: { status: 'success'|'failed', notebook_path, conforms_to_plan: bool, deviations: [], warnings: [], errors: [], risks_isolated: [risk_ids] }",
   run_in_background: true,
-  mode: "acceptEdits",
-  isolation: "worktree"
+  mode: "acceptEdits"
 )
 ```
 
-After all builders complete, scan envelopes. Strict conformance gate:
+After all builders complete, **trust-but-verify**: scan envelopes AND confirm each claimed `notebook_path` actually exists on disk via `ls`. If the file is missing despite `status: 'success'`, treat it as a failed builder. Then run the strict conformance gate:
 
-- Any `status != 'success'`, `conforms_to_plan == false`, non-empty `errors[]`, or non-empty `deviations[]` → **HALT**.
+- Any `status != 'success'`, missing file at `notebook_path`, `conforms_to_plan == false`, non-empty `errors[]`, or non-empty `deviations[]` → **HALT**.
 - Log full context to Section 11. Use `AskUserQuestion`:
   - **Accept deviation** → user confirms; orchestrator updates Section 6 to match reality; proceed.
   - **Abort** → pipeline stops; user fixes sources or refactor decisions; restart.
 
-Clean run: merge envelopes into Section 7 + 9, merge worktrees back to main.
+Clean run: merge envelopes into Section 7 + 9.
 
 ### Stage 9 — Build Silver Notebooks (canary + parallel)
 
@@ -371,12 +397,13 @@ Task(
 
   Return JSON envelope: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }",
   run_in_background: true,
-  mode: "acceptEdits",
-  isolation: "worktree"
+  mode: "acceptEdits"
 )
 ```
 
-Conformance gate same as Stage 8, with extra check: every silver envelope's `read_bronze_only` must be `true`. Any `false` → halt (the silver-builder slipped a `spark.read.csv` somewhere, contract broken).
+Each silver builder writes to a unique `nb_silver_<query>.ipynb` filename, so no file-collision risk in the shared directory.
+
+Conformance gate same as Stage 8 (trust-but-verify: confirm each claimed `notebook_path` exists on disk), with extra check: every silver envelope's `read_bronze_only` must be `true`. Any `false` → halt (the silver-builder slipped a `spark.read.csv` somewhere, contract broken).
 
 ### Stage 10 — Deploy Notebooks (skip in --dry-run)
 

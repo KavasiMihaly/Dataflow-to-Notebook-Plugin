@@ -132,9 +132,63 @@ This gives users a complete picture of what the plugin produces before they poin
 Migration tools are mostly mechanical, so user touchpoints should be minimal:
 1. **Stage 1** — config (workspace ID, lakehouse names) — skipped if userConfig is set
 2. **Stage 5** — refactor decisions (dynamic 3-4 questions)
-3. **Stage 6** — plan-mode approval
+3. **Stage 6** — approval gate (originally plan mode; now `AskUserQuestion` — see N10)
 
 vs the dbt plugin's two touchpoints. The extra Stage 1 exists because Fabric needs config that isn't available at install time (workspace IDs are dynamic) — but it's optional when userConfig is pre-set.
+
+---
+
+## Discovered during first dry-run testing (2026-05-14)
+
+These four findings emerged from running the plugin end-to-end against the bundled `--sample --dry-run` for the first time. They're a class of "silent-failure" bugs — agents reported `status: success`, but the runtime didn't actually deliver what was promised. Each one is worth carrying forward to every future plugin build.
+
+### N8 — Worktree isolation requires a commit-and-merge-back step; without it, agent output is silently destroyed
+
+**Symptom:** All 4 bronze builders reported `status: 'success'` with non-empty `notebook_path` in their envelopes. Conformance gate passed. Then no `.ipynb` files existed in `3 - Notebooks/bronze/`. Trust-but-verify caught it.
+
+**Root cause:** Three layered enabling conditions, all originally inherited from the dbt plugin:
+
+1. `agents/fabric-bronze-builder/agent.md` had `isolation: worktree` in its frontmatter, which forces every spawn into a worktree regardless of what the caller passes.
+2. `agents/fabric-silver-builder/agent.md` had the same.
+3. `hooks/remove-worktree.py` ran `git worktree remove --force` when the agent finished, wiping the entire worktree filesystem — including the freshly-written `.ipynb` files.
+
+The builder's envelope was honest — it really did write the file. The hook deleted it milliseconds later, before the orchestrator could see it. The dbt plugin works because dbt models are tracked in git and the worktree commits them; the Fabric builders write untracked `.ipynb` files that vanish with the worktree.
+
+**Fix (the simple one applied here):** dropped worktree isolation entirely. Each builder writes to a unique `nb_{layer}_{query}.ipynb` filename, so there was never any actual file-collision risk to justify isolation. The builders now write directly to the main repo's `3 - Notebooks/{bronze,silver}/`. Removed `isolation: worktree` from both builder frontmatters, removed `WorktreeCreate` / `WorktreeRemove` hook registrations from `plugin.json`, deleted `hooks/create-worktree.py` and `hooks/remove-worktree.py`.
+
+**Reusable rule for future plugin builds:** Only adopt `isolation: worktree` if (a) the agent writes files that are already git-tracked AND (b) the WorktreeRemove hook explicitly commits and merges back to the main worktree before the `git worktree remove`. The default dbt-plugin hooks do NOT do this — they assume the agent committed the work itself, which is true for dbt's models-as-source-controlled-text pattern but false for any agent that writes new artifacts like notebooks, generated docs, or build outputs. If your agents create new files, either (a) add a merge-back step to the WorktreeRemove hook before the `git worktree remove --force`, or (b) skip worktree isolation entirely and rely on unique per-agent filenames to avoid collisions.
+
+**Detection mechanism:** the orchestrator's Stage 8/9 now does a trust-but-verify pass — for each builder envelope claiming `status: 'success'`, it `ls`'s the claimed `notebook_path` to confirm the file actually exists on disk. Missing file → halt and surface as a deviation. This belongs in every orchestrator that fans out to background builders; envelopes alone are not enough.
+
+### N9 — Interactive subagents MUST be spawned foreground explicitly; comments are not parameters
+
+**Symptom:** Stage 5 silently produced default refactor decisions in `migration-design.md` — the user was never asked anything. The `migration-analyst` ran, wrote its sections, and returned. No questions appeared.
+
+**Root cause:** The orchestrator's Stage 5 Task spec had `// foreground — needs AskUserQuestion access` as a code-style comment instead of an explicit parameter. Stages 3 and 4 (mechanical analysis) explicitly used `run_in_background: true`. The orchestrating model pattern-matched that syntax onto Stage 5 and inferred away the comment, sending the analyst to the background. Background subagents have no user channel, so `AskUserQuestion` silently no-ops and the analyst falls back to defaults.
+
+**Fix:** Replaced the comment with explicit `run_in_background: false`. Added an emphatic preamble explaining why Stage 5 differs from Stages 3/4. Added a post-spawn verification: read the design doc Section 5 after the analyst returns; if it's blank or default-only, halt rather than silently proceeding.
+
+**Reusable rule for future plugin builds:** Any subagent that calls `AskUserQuestion` (or any other user-facing tool) MUST be spawned with explicit `run_in_background: false`. Do not rely on defaults or comments. After the foreground subagent returns, verify in your orchestrator text that the user-input artifact actually contains user input — not defaults — before proceeding. If the artifact is empty or default-only, halt with an error; do not let the pipeline drift past unattended.
+
+### N10 — Plan-mode approval requires the `EnterPlanMode` tool; `AskUserQuestion` is a simpler substitute
+
+**Symptom:** Stage 6 was supposed to surface a plan-mode review for user approval. It silently no-op'd — the orchestrator just printed a summary and continued to Stage 7. No approval gate was ever shown.
+
+**Root cause:** The orchestrator's `tools:` frontmatter list did not include `EnterPlanMode` or `ExitPlanMode`. The Stage 6 stage instructions said *"Enter native plan mode"* but the agent literally couldn't — the tool wasn't granted. With no tool error visible (just a no-op), the model carried on with the surrounding instructions.
+
+**Fix:** Replaced "Enter native plan mode" with an `AskUserQuestion` flow. Print the migration outcome as a text block first (full context), then issue an `AskUserQuestion` with three options: `Approve and proceed` / `Revise refactor decisions` (loops back to Stage 5) / `Abort` (writes a Section 11 reason, stops cleanly). `AskUserQuestion` was already in the orchestrator's toolset.
+
+**Reusable rule for future plugin builds:** If you want a plan-mode approval gate in an agent, either (a) explicitly add `EnterPlanMode` and `ExitPlanMode` to its `tools:` frontmatter and verify they work in your Claude Code build, or (b) use `AskUserQuestion` with explicit `Approve / Revise / Abort` options. Option (b) is more portable across Claude Code versions and doesn't depend on a tool that might or might not be available. If you choose (a), verify with a fresh-install test that the plan-mode actually fires — silent no-op is the default failure mode here.
+
+### N11 — Slash commands cannot host an orchestrator that delegates to multiple subagents
+
+**Symptom:** This was discovered earlier in the same session but is summarized here for completeness.
+
+**Root cause:** Slash commands run inside an existing Claude session. If a slash command spawns the orchestrator via `Task(...)`, the orchestrator becomes a subagent. Claude Code's hierarchy rules prevent a subagent from spawning further subagents — so the orchestrator's own `Task(...)` calls to its specialists silently no-op, stalling the pipeline.
+
+**Fix:** Deleted the `/migrate-dataflows` slash command entirely. The orchestrator is now launched only as the main Claude session via `claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "..."` from a fresh shell.
+
+**Reusable rule for future plugin builds:** Slash commands cannot host any agent that needs to delegate to multiple subagents. If your plugin has such an agent, document the `claude --agent ...` launch as the canonical entry point and either omit the slash command entirely or have it print a "you must launch from a fresh shell" message rather than silently spawning a broken pipeline.
 
 ---
 
@@ -147,7 +201,7 @@ These will be filled in after Phase 10 testing:
 - **Does `migration-analyst`'s `AskUserQuestion` work in the plan-mode pre-flight stage?** The agent runs foreground, but there may be quirks with combining `AskUserQuestion` and the orchestrator's plan-mode entry.
 - **Does the `fabric-notebook-deployer` skill work end-to-end against a real workspace?** The Fabric REST API call shape (`POST /v1/workspaces/<id>/notebooks` with base64 payload) is documented but unverified in this context.
 - **Does the orchestrator successfully pass `mode: "acceptEdits"` at every Task spawn?** Pre-shipment audit doesn't directly check this — needs runtime verification.
-- **Do worktree hooks work on Windows for parallel bronze builds?** The dbt plugin uses these without issue, but Windows path handling sometimes surfaces edge cases.
+- ~~**Do worktree hooks work on Windows for parallel bronze builds?**~~ ANSWERED 2026-05-14 — no. The default dbt-style hooks `git worktree remove --force` the agent's filesystem before any output is merged back, destroying every uncommitted file the agent just wrote. Worktree isolation is unsafe for any agent that writes new untracked files. See N8 for the resolution.
 
 ---
 
@@ -166,7 +220,7 @@ These will be filled in after Phase 10 testing:
 Overall: PASS
 ```
 
-~50 files. 6 agents, 8 skills, 5 hooks, 5 reference docs, 2 sample dataflows, 1 quickstart, 1 README, 1 plugin manifest, 2 test scripts. (No slash command — the orchestrator launches as the main agent via `claude --agent ...`, not via a slash command, to satisfy Claude Code's subagent hierarchy rules.)
+~50 files. 6 agents, 8 skills, 3 hooks, 5 reference docs, 2 sample dataflows, 1 quickstart, 1 README, 1 plugin manifest, 2 test scripts. (No slash command — the orchestrator launches as the main agent via `claude --agent ...`, not via a slash command, to satisfy Claude Code's subagent hierarchy rules. Hook count dropped from 5 to 3 after the 2026-05-14 worktree removal — see N8.)
 
 ---
 
@@ -176,7 +230,7 @@ Overall: PASS
 |---|---|---|
 | Agents | 6 | 4 net-new, 2 vendored |
 | Skills | 8 | 6 vendored, 2 net-new |
-| Hooks | 5 | 2 mirrored from dbt, 2 net-new, 1 generic |
+| Hooks | 3 | 2 net-new (Bash auto-approval, structure validator), 1 generic (session config check); 2 worktree hooks removed 2026-05-14 — see N8 |
 | Reference docs | 5 | 4 copied, 1 net-new (risk catalog) |
 | Sample dataflows | 2 | net-new synthetic JSONs |
 | Test scripts | 2 | net-new pre-shipment audit + notebook validator |

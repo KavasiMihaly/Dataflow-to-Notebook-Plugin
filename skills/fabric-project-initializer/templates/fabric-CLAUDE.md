@@ -149,11 +149,8 @@ ls "1 - Documentation/data-profiles/"
 │   ├── gold/                   # Gold dimension/fact notebooks
 │   ├── utilities/              # Shared utility notebooks
 │   └── orchestration/          # Pipeline DAG notebooks
-├── 4 - Semantic Layer/         # Power BI TMDL files
-├── 5 - Report Building/        # .pbip report files
 ├── 6 - Agentic Resources/      # Agent reference materials
 │   └── reference/
-├── 7 - Data Exports/           # Query results
 └── CLAUDE.md                   # This file
 ```
 

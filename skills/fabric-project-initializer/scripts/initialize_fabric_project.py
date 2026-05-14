@@ -60,10 +60,7 @@ def create_folder_structure(target_path: Path) -> dict:
         "1 - Documentation": "Project documentation and requirements",
         "2 - Source Files": "Source data and external files",
         "3 - Notebooks": "PySpark notebooks by medallion layer",
-        "4 - Semantic Layer": "Power BI semantic models (TMDL)",
-        "5 - Report Building": "Power BI reports and dashboards",
         "6 - Agentic Resources": "Reference materials and patterns",
-        "7 - Data Exports": "Query results and validation outputs",
     }
 
     created = {}
@@ -276,10 +273,7 @@ Project configuration for Microsoft Fabric medallion architecture.
 │   ├── gold/                   # Dimension/fact notebooks
 │   ├── utilities/              # Shared functions
 │   └── orchestration/          # Pipeline DAG notebooks
-├── 4 - Semantic Layer/         # Power BI TMDL
-├── 5 - Report Building/        # Power BI reports
-├── 6 - Agentic Resources/      # Reference materials
-└── 7 - Data Exports/           # Query results
+└── 6 - Agentic Resources/      # Reference materials
 ```
 
 ## Getting Started
