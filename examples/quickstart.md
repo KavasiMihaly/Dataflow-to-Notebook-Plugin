@@ -36,19 +36,15 @@ mkdir ~/fabric-migration-test
 cd ~/fabric-migration-test
 ```
 
-### 2. Run the slash command
+### 2. Launch the orchestrator as the main agent
 
-```
-/migrate-dataflows --sample --dry-run
-```
-
-Or invoke the orchestrator directly:
+From a **fresh shell** (not from inside an existing Claude session), run:
 
 ```bash
-claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate sample dataflows in dry-run mode"
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate sample dataflows. Flags: --sample --dry-run"
 ```
 
-(Add `--sample --dry-run` to the prompt text.)
+The orchestrator must run as the main Claude session, not as a subagent. It delegates to 5 specialist subagents (`m-query-analyst`, `migration-analyst`, `fabric-bronze-builder`, `fabric-silver-builder`, `fabric-pipeline-validator`), and Claude Code's hierarchy rules prevent a subagent from spawning further subagents — so the orchestrator must be the main thread for its delegation to work.
 
 ### 3. Walk through the 13 stages
 
@@ -110,7 +106,7 @@ Now that you've seen the output shape:
 
 1. **Review the HIGH RISK cells** — these are the spots that need manual attention. Update them based on your storage configuration.
 2. **Adjust refactor decisions** — re-run with different answers at Stage 5 to see how output changes (e.g., `Combine Files: preserve` vs `absorb`).
-3. **Point at production** — set your real workspace ID via `/plugin` config and run `/migrate-dataflows` (no `--sample`, no `--dry-run`).
+3. **Point at production** — set your real workspace ID via `/plugin` config, then launch from a fresh shell with no flags: `claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>"`.
 
 ---
 

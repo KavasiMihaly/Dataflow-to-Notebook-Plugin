@@ -231,7 +231,6 @@ def gate_required_files(findings: list[dict]) -> bool:
     required = [
         ".claude-plugin/plugin.json",
         "README.md",
-        "commands/migrate-dataflows.md",
         "agents/fabric-migration-orchestrator/agent.md",
         "agents/m-query-analyst/agent.md",
         "agents/migration-analyst/agent.md",

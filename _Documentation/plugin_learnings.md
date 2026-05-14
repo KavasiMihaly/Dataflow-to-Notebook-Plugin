@@ -166,7 +166,7 @@ These will be filled in after Phase 10 testing:
 Overall: PASS
 ```
 
-50 files. 6 agents, 8 skills, 5 hooks, 5 reference docs, 2 sample dataflows, 1 quickstart, 1 README, 1 plugin manifest, 1 slash command, 2 test scripts.
+~50 files. 6 agents, 8 skills, 5 hooks, 5 reference docs, 2 sample dataflows, 1 quickstart, 1 README, 1 plugin manifest, 2 test scripts. (No slash command — the orchestrator launches as the main agent via `claude --agent ...`, not via a slash command, to satisfy Claude Code's subagent hierarchy rules.)
 
 ---
 

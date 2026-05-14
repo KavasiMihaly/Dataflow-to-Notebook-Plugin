@@ -3,7 +3,7 @@
 
 Mitigates the dbt-plugin Finding 5 Problem B: userConfig prompts may not fire
 on install. If they didn't, this hook surfaces the gap at every session start
-so the user knows what to set before running /migrate-dataflows.
+so the user knows what to set before launching the migration orchestrator.
 
 Contract:
   Input on stdin: SessionStart JSON event (we don't actually need the input)
@@ -49,7 +49,7 @@ def main() -> int:
             "",
             "=== fabric-dataflow-migration-toolkit: Setup Required ===",
             "",
-            "The plugin needs userConfig values before /migrate-dataflows can run.",
+            "The plugin needs userConfig values before the migration orchestrator can run.",
             "",
             "Missing (required):",
         ]
@@ -74,8 +74,9 @@ def main() -> int:
                 "  Option B: Edit ~/.claude/settings.json under",
                 "           pluginConfigs[fabric-dataflow-migration-toolkit].options",
                 "",
-                "Or try without Fabric access:",
-                "  /migrate-dataflows --sample --dry-run",
+                "Or try without Fabric access (from a fresh shell, not inside this session):",
+                "  claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator \\",
+                "    \"Migrate sample dataflows. Flags: --sample --dry-run\"",
                 "  (uses bundled sample dataflows; no workspace needed)",
                 "",
                 "==========================================================",

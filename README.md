@@ -33,7 +33,7 @@ Microsoft [marked Dataflow Gen1 as Legacy in April 2026](https://powerbi.microso
 - **6 Agents** — orchestrator, mechanical M analyst, interactive migration analyst, bronze + silver builders, end-to-end validator
 - **9 Skills** — Dataflow Gen1 extractor, M-to-PySpark converter, Fabric CLI runner, lakehouse reader, project initializer, data profiler, notebook deployer, pre-flight check, **opt-in pattern-sharing reporter**
 - **5 Hooks** — Bash auto-approval for plugin scripts, structural validation, worktree create/remove, session-start config check
-- **`/migrate-dataflows` slash command** — single-command entry point
+- **Orchestrator-as-main-agent launch** — single `claude --agent ...` invocation drives the full 13-stage pipeline
 - **Dry-run mode** — full pipeline without Fabric access, using bundled sample dataflows
 - **12 documented M-conversion risk patterns** — best-effort PySpark output with explicit human-review markers
 - **Reference materials** — PySpark style guide, notebook templates, Delta Lake patterns, M-to-PySpark mapping, risk catalog
@@ -80,20 +80,23 @@ During install you'll be prompted for the `userConfig` values listed below.
 
 ```
 /agents             # expect 6 fabric-dataflow-migration-toolkit:* agents
-/migrate-dataflows --help
 ```
 
 ---
 
 ## Quick start (no Fabric workspace needed)
 
-Try the full pipeline against bundled sample dataflows:
+Try the full pipeline against bundled sample dataflows. From a **fresh shell** (not from inside an existing Claude session), `cd` into an empty working folder and launch the orchestrator as the main agent:
 
-```
-/migrate-dataflows --sample --dry-run
+```bash
+mkdir ~/fabric-migration-test
+cd ~/fabric-migration-test
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate sample dataflows. Flags: --sample --dry-run"
 ```
 
 This runs every stage except deployment — extracts sample Gen1 JSON, analyzes M queries, generates bronze + silver `.ipynb` notebooks locally, and produces a migration report. Inspect the output before pointing at production.
+
+> **Why launch as the main agent?** The orchestrator delegates to 5 specialist subagents (`m-query-analyst`, `migration-analyst`, `fabric-bronze-builder`, `fabric-silver-builder`, `fabric-pipeline-validator`). Claude Code's hierarchy rules prevent a subagent from spawning further subagents — so the orchestrator must run as the main thread to delegate. Always launch via `claude --agent ...` from a fresh shell, never from inside an existing Claude session.
 
 See [`examples/quickstart.md`](examples/quickstart.md) for a full walkthrough.
 
@@ -187,19 +190,22 @@ You see the before/after preview before any `gh issue create` call. Sanitization
 
 ## Usage
 
-### Single-command entry
+### Launching the orchestrator (must be the main agent)
 
-```
-/migrate-dataflows                       # full migration with deployment
-/migrate-dataflows --dry-run             # generate notebooks, skip deployment
-/migrate-dataflows --sample --dry-run    # use bundled sample dataflows
-```
-
-### Or invoke the orchestrator directly
+The orchestrator is designed to run as the **main Claude session**, not as a subagent of an existing one. Launch it from a fresh shell via `claude --agent ...`:
 
 ```bash
+# Full migration with deployment
 claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>"
+
+# Generate notebooks, skip deployment
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>. Flags: --dry-run"
+
+# Use bundled sample dataflows, no Fabric access needed
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate sample dataflows. Flags: --sample --dry-run"
 ```
+
+**Do not** try to launch the orchestrator from inside an existing Claude session (e.g. by typing a prompt that asks to spawn the orchestrator via the `Task` tool). The orchestrator delegates to 5 specialist subagents, and Claude Code's hierarchy rules prevent a subagent from spawning further subagents — so it must be the main thread for its delegation to work.
 
 ### Agents
 
@@ -247,8 +253,6 @@ reference/                       # PySpark style guide, M conversion catalog, no
 examples/
   ├── sample-dataflows/          # Bundled Gen1 JSON exports for --sample mode
   └── quickstart.md
-commands/
-  └── migrate-dataflows.md       # Slash command
 tests/
   └── validate_notebooks.py      # Pytest-style notebook shape validator
 _Documentation/
@@ -320,7 +324,7 @@ Four validation layers:
 | Notebook deploys but cells run as one mega-cell | You shipped `.py` instead of `.ipynb` — the validator should catch this; rebuild |
 | `userConfig` prompt didn't fire on install | Edit `~/.claude/settings.json` directly under `pluginConfigs[fabric-dataflow-migration-toolkit].options` |
 | Background subagent stalls during notebook generation | Verify `approve-plugin-bash.py` hook fires; Fabric allowlist may need extension |
-| Plan-mode gate at Stage 6 doesn't appear | Orchestrator must run as main thread via `/migrate-dataflows`, not via auto-delegation |
+| Plan-mode gate at Stage 6 doesn't appear | Orchestrator must run as the main thread — launch via `claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "..."` from a fresh shell, not from inside an existing Claude session |
 
 ---
 

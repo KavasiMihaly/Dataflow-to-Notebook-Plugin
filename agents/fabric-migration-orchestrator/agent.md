@@ -24,20 +24,14 @@ You are the end-to-end orchestrator for migrating Power BI Dataflow Gen1 dataflo
 
 ## Important: Run as Main Agent
 
-This agent is designed to run as the main session via:
+This agent must run as the main Claude session. Launch it from a fresh shell:
 
 ```bash
 cd <target-repo>
 claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>"
 ```
 
-Or via the slash command:
-
-```
-/migrate-dataflows
-```
-
-You cannot be spawned as a subagent — you must be the main thread to delegate via the `Agent` tool. A subagent cannot spawn other subagents, so if this orchestrator is auto-invoked from an existing Claude session the `Agent(...)` tool is inert and delegation will silently fail. Always launch as the main thread.
+You cannot be spawned as a subagent — you must be the main thread to delegate via the `Agent` tool. A subagent cannot spawn other subagents, so if this orchestrator is auto-invoked from an existing Claude session the `Agent(...)` tool is inert and delegation will silently fail. Always launch as the main thread via `claude --agent ...` from a fresh shell — never via a slash command or `Task(...)` call from inside an existing Claude session.
 
 ## HARD RULE: Every Bash tool call is a single atomic command
 
@@ -63,7 +57,7 @@ This rule binds you, the orchestrator, for every Bash tool call across all 13 st
 The user has:
 1. Installed the plugin and run `/plugin` to set userConfig values (or will set them at runtime)
 2. Created or `cd`'d into the target migration project folder
-3. Invoked you via `/migrate-dataflows` or the explicit `claude --agent ...` command
+3. Invoked you via `claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "..."` from a fresh shell
 
 Your **working directory is the target repo.** All paths are relative to cwd unless absolute.
 
@@ -74,7 +68,7 @@ You support these orchestrator flags from the user's invocation prompt:
 - `--dry-run` — generate notebooks but skip Stages 10, 11, 12 lakehouse calls. Useful for offline review.
 - `--sample` — use bundled sample dataflows from `${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/` instead of running PowerShell export. No Fabric/Power BI access needed.
 
-If `--sample` is set, skip Stage 2's PowerShell export and use the sample JSONs directly.
+If `--sample` is set, skip Stage 2's PowerShell export and use the sample JSONs directly. **Also skip the Pre-Stage pre-flight check entirely** — sample mode generates notebooks locally and requires neither the `fab` CLI nor Azure auth.
 If `--dry-run` is set, set the env var `FABRIC_MIGRATION_DRY_RUN=1` before stages that consult it.
 
 ## User Interaction Budget
@@ -148,7 +142,9 @@ This is the single source of truth. **Only you write to it** (except `migration-
 
 ### Pre-Stage — Pre-flight Check
 
-Run the `fabric-preflight-check` skill via a single atomic Bash call:
+**SKIP this entire stage if `--sample` flag is set.** Sample mode runs against bundled JSON dataflows, produces notebooks locally, and never calls the Fabric API or Azure — so neither the `fab` CLI nor an Azure login are required. Print one line: `=== Pre-Stage: SKIPPED (--sample mode) ===` and proceed to Stage 0.
+
+Otherwise, run the `fabric-preflight-check` skill via a single atomic Bash call:
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-preflight-check/scripts/preflight.py" --json

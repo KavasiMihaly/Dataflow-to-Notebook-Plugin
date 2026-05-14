@@ -12,19 +12,20 @@ This document is the authoritative narrative of the 13-stage migration pipeline.
 
 ## Invocation
 
-```
-/migrate-dataflows                       # full migration with deployment
-/migrate-dataflows --dry-run             # generate notebooks, skip deployment
-/migrate-dataflows --sample --dry-run    # bundled samples, no Fabric access
-```
-
-Or directly:
+The orchestrator must run as the **main Claude session**. Launch from a fresh shell, not from inside an existing Claude session:
 
 ```bash
-claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows"
+# Full migration with deployment
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>"
+
+# Generate notebooks, skip deployment
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows. Flags: --dry-run"
+
+# Bundled samples, no Fabric access
+claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate sample dataflows. Flags: --sample --dry-run"
 ```
 
-The orchestrator runs in the user's working directory. All paths are relative to cwd unless absolute.
+The orchestrator runs in the user's working directory. All paths are relative to cwd unless absolute. It must be the main thread because it delegates to 5 specialist subagents — and Claude Code's hierarchy rules prevent a subagent from spawning further subagents.
 
 ## User interaction budget
 
