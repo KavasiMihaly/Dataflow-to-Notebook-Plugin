@@ -224,7 +224,18 @@ Then write a clear instruction to the user that **leads with prerequisites** and
 >
 > The script will write `0 - Architecture Setup/gen1-dataflow-inventory.csv` listing every accessible Gen1 dataflow. Open the CSV, pick the workspace(s) you want to migrate, and reply here with the `workspace_id` value (GUID).
 >
-> **If you hit "MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run the script. No other setup is needed.
+> **Common issues and fixes:**
+>
+> - **"MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
+> - **The script prints "A browser window will open..." but no browser opens** — `Connect-PowerBIServiceAccount` cannot reliably auto-launch a browser in PowerShell 7 / `pwsh -File` / VS Code integrated terminal / remote sessions. Two fixes, in order of preference:
+>   - Press Ctrl+C and re-run with `-UseDeviceCode`. The script prints a code + URL; open the URL in any browser, paste the code, sign in:
+>     ```powershell
+>     pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1" -UseDeviceCode
+>     ```
+>   - OR re-run with Windows PowerShell 5.1 (`powershell` instead of `pwsh`), which uses the older WebBrowser-based auth that more reliably launches the default browser:
+>     ```powershell
+>     powershell -File "0 - Architecture Setup/Discover-AllDataflows.ps1"
+>     ```
 
 When the user replies with a workspace GUID, treat it as their `source_workspace_id` and proceed to Stage 1b. Record in Section 11 (Design Decisions Log) which workspace they picked and how many dataflows were in it per the CSV.
 
@@ -285,7 +296,18 @@ Then write a clear instruction to the user that **leads with prerequisites** (sk
 >
 > It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `1 - Source Dataflows/`. Reply here when done.
 >
-> **If you hit "MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
+> **Common issues and fixes:**
+>
+> - **"MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
+> - **The script prints "A browser window will open..." but no browser opens** — same root cause and fixes as Stage 1a discovery. Press Ctrl+C and either:
+>   - Re-run with `-UseDeviceCode` (code + URL printed; paste into any browser):
+>     ```powershell
+>     pwsh -File "0 - Architecture Setup/Export-AllDataflows.ps1" -UseDeviceCode
+>     ```
+>   - OR re-run under Windows PowerShell 5.1:
+>     ```powershell
+>     powershell -File "0 - Architecture Setup/Export-AllDataflows.ps1"
+>     ```
 
 Wait for user confirmation, then parse the JSONs:
 

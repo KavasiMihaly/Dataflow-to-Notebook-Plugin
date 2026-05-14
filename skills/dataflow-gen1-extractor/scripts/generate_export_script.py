@@ -27,10 +27,13 @@ TEMPLATE = r'''<#
 .EXAMPLE
     .\Export-AllDataflows.ps1
     .\Export-AllDataflows.ps1 -OutputDir "C:\exports"
+    .\Export-AllDataflows.ps1 -UseDeviceCode             # fallback if browser does not open
 #>
 
 param(
-    [string]$OutputDir = "{json_dir}"
+    [string]$OutputDir = "{json_dir}",
+
+    [switch]$UseDeviceCode
 )
 
 # --- Configuration ---
@@ -58,14 +61,33 @@ if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {{
 
 # --- Connect to Power BI Service ---
 Write-Host "`n=== Connecting to Power BI Service ===" -ForegroundColor Cyan
-Write-Host "A browser window will open for authentication..." -ForegroundColor Yellow
+Write-Host "PowerShell edition: $($PSVersionTable.PSEdition)  version: $($PSVersionTable.PSVersion)" -ForegroundColor DarkGray
+
+if ($UseDeviceCode) {{
+    Write-Host "Using device code flow. A code + URL will print below — open the URL in any browser, enter the code, sign in." -ForegroundColor Yellow
+}} else {{
+    Write-Host "A browser window should open shortly." -ForegroundColor Yellow
+    Write-Host "If it does NOT open within ~30 seconds (common in PowerShell 7 / pwsh -File / remote / VS Code terminals), press Ctrl+C and re-run with -UseDeviceCode:" -ForegroundColor Yellow
+    Write-Host "  pwsh -File `"$PSCommandPath`" -UseDeviceCode" -ForegroundColor DarkYellow
+    Write-Host "Or run in Windows PowerShell 5.1 instead of pwsh 7:" -ForegroundColor Yellow
+    Write-Host "  powershell -File `"$PSCommandPath`"" -ForegroundColor DarkYellow
+}}
+
 try {{
-    Connect-PowerBIServiceAccount -ErrorAction Stop
+    if ($UseDeviceCode) {{
+        Connect-PowerBIServiceAccount -DeviceCode -ErrorAction Stop | Out-Null
+    }} else {{
+        Connect-PowerBIServiceAccount -ErrorAction Stop | Out-Null
+    }}
     Write-Host "Connected successfully." -ForegroundColor Green
 }}
 catch {{
     Write-Host "ERROR: Failed to connect to Power BI Service." -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
+    if (-not $UseDeviceCode) {{
+        Write-Host "`nTry the device code flow instead:" -ForegroundColor Yellow
+        Write-Host "  pwsh -File `"$PSCommandPath`" -UseDeviceCode" -ForegroundColor DarkYellow
+    }}
     exit 1
 }}
 
