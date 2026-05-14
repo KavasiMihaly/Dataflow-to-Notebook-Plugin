@@ -190,6 +190,29 @@ The builder's envelope was honest — it really did write the file. The hook del
 
 **Reusable rule for future plugin builds:** Slash commands cannot host any agent that needs to delegate to multiple subagents. If your plugin has such an agent, document the `claude --agent ...` launch as the canonical entry point and either omit the slash command entirely or have it print a "you must launch from a fresh shell" message rather than silently spawning a broken pipeline.
 
+### N12 — Corporate TLS interception breaks every Python-based CLI, not just git
+
+**Symptom:** During first live-run testing on a machine with Norton Antivirus's "Web/Mail Shield" HTTPS scanning, every Python-backed CLI tool hits SSL handshake failures against `*.microsoft.com`, `api.powerbi.com`, `*.fabric.microsoft.com`:
+
+- `git` — *"SSL peer certificate or SSH remote key was not OK"* (fixed earlier with `git config --global http.sslBackend schannel`)
+- `az` CLI — `az login`, `az login --use-device-code`, `az account get-access-token` all fail
+- `ms-fabric-cli` (`fab`) — same Python/requests stack, same failure
+- Anything else importing `requests` / using `certifi`
+
+**Root cause:** The corporate TLS interceptor (Norton in this case, but Zscaler / Palo Alto / Sophos / NetSkope all behave identically) re-signs HTTPS connections with its own root CA. Windows trusts that root because the interceptor installs it into the Windows certificate store. But every Python tool uses its own bundled `certifi` cert list which knows nothing about the corporate root, so the handshake fails.
+
+**Reusable rules for future plugin builds:**
+
+1. **Prefer Windows-native auth paths for any user-facing prerequisite check.** PowerShell 5.1 + `Connect-*` cmdlets (WebBrowser COM, Windows cert store), ODBC drivers (Windows TLS stack), .NET HttpClient — these "just work" in TLS-intercepted environments because they trust whatever Windows trusts. Reserve Python-based CLIs for environments where you control the trust store.
+
+2. **Do not assume `az login` works.** It's listed in countless Microsoft tutorials as the universal auth on-ramp, but in corporate-network environments it's broken by default. If your plugin requires `az` (the fabric plugin does — for Stages 10–12 fab CLI calls), document the `REQUESTS_CA_BUNDLE` workaround prominently and surface it BEFORE the user hits the failure. Same for `pip install` against PyPI behind a proxy.
+
+3. **The `REQUESTS_CA_BUNDLE` fix:** extract the corporate root CA from the Windows store (`certmgr.msc` → Trusted Root Certification Authorities → export Base-64 .CER), append to a copy of `certifi`'s `cacert.pem`, set `REQUESTS_CA_BUNDLE` env var to the augmented file. One-time per user; survives reboots if set with `setx`.
+
+4. **When a PowerShell script needs an external auth flow** (Power BI, Graph, etc.), **default to Windows PowerShell 5.1 (`powershell.exe -File`)**, not pwsh 7 (`pwsh.exe -File`). PS 5.1's in-process WebBrowser COM auth dialog works in environments where pwsh 7's MSAL-based external-browser launch silently hangs. The fabric plugin's `Discover-AllDataflows.ps1` and `Export-AllDataflows.ps1` are both now explicitly documented as "use PS 5.1, not pwsh 7" for this reason.
+
+**Discovered:** 2026-05-14 during live-test run #1 against the user's corporate-network Windows machine. Reproduced and isolated as a TLS-interception problem (not a tool bug, not an auth bug) by checking the cert chain — issuer was `Norton Web/Mail Shield Root`, not DigiCert.
+
 ---
 
 ## Open questions for first fresh-install run

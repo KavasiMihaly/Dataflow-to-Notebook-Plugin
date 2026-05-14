@@ -58,6 +58,47 @@ Before installing, make sure you have:
 
 ---
 
+## Corporate environment setup (TLS interception)
+
+**Run this once if you're on a corporate / managed-AV Windows machine.** Many environments include a TLS-intercepting middlebox or HTTPS-scanning antivirus — Norton, Zscaler, Palo Alto, Sophos, NetSkope, BitDefender, ESET, McAfee, Cisco Umbrella, etc. These re-sign every HTTPS connection with their own root CA. Windows trusts that root because the tool installs it into the Windows certificate store, but **Python-based CLIs do not** — they use the bundled `certifi` cert list, which knows nothing about the corporate root. This breaks:
+
+- `git clone` of the marketplace (manifests as `SSL peer certificate or SSH remote key was not OK`)
+- `az login` (`SSL: CERTIFICATE_VERIFY_FAILED` or similar)
+- `ms-fabric-cli` / `fab` (same)
+- `pip install ms-fabric-cli` against PyPI in some configurations
+
+**Symptoms it's happening:**
+- HTTPS works in your browser but fails in CLIs
+- The cert chain seen by tools shows an issuer other than DigiCert / Microsoft / Sectigo / GlobalSign — typically your AV or proxy product's name
+
+**The git-only fix** (PowerShell, one-time, no admin):
+
+```powershell
+git config --global http.sslBackend schannel
+```
+
+This makes git use the Windows TLS stack — which trusts whatever Windows trusts. Solves only git.
+
+**The full fix for every Python-based tool** (PowerShell, one-time, no admin):
+
+```powershell
+powershell -File examples\Setup-CorpCertBundle.ps1
+```
+
+This script (bundled with the plugin in `examples/`):
+1. Exports every root CA from your Windows cert store (including the corporate interceptor's root).
+2. Appends them to a copy of Python's certifi bundle.
+3. Sets `REQUESTS_CA_BUNDLE` (and `CURL_CA_BUNDLE`) at User scope, permanently.
+4. Probes `https://api.fabric.microsoft.com/` to confirm Python now trusts the chain.
+
+After it completes, **close and reopen your terminal** (and Claude Code, if running) so the env var is picked up. `az login` and `fab` calls will then work without any further configuration.
+
+> **Heads-up:** the plugin's pre-flight check (`fabric-preflight-check` skill, runs at orchestrator Pre-Stage in non-sample mode) probes for this issue and surfaces a warning if Python TLS to Microsoft endpoints is broken — so you'll typically be told to run this script before reaching the stages where it matters (Stage 10 onward).
+
+For the root-cause explanation and a full list of which tools are affected, see [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) finding N12.
+
+---
+
 ## Installation
 
 ### 1. Add the OneDayBI marketplace
@@ -323,8 +364,12 @@ Four validation layers:
 | Symptom | Fix |
 |---|---|
 | Marketplace not found | Run `/plugin marketplace add` before `/plugin install` |
+| `git clone` of marketplace fails with `SSL peer certificate ... not OK` | Corporate TLS interception. Run `git config --global http.sslBackend schannel` to make git use the Windows cert store. See "Corporate environment setup" above. |
+| `az login` fails with `SSL: CERTIFICATE_VERIFY_FAILED` (or similar) | Same root cause but Python-based. Run `powershell -File examples\Setup-CorpCertBundle.ps1` to augment Python's certifi bundle with the Windows trust store. See "Corporate environment setup" above. |
 | `fab` CLI not found | `pip install ms-fabric-cli` (the pre-flight check tells you this) |
-| Auth fails | Run `az login` interactively, or set `azure_*` userConfig for SP auth |
+| `fab` CLI installed but fails with cert errors at Stages 10–12 | Same root cause as `az login` failing — run `Setup-CorpCertBundle.ps1`. |
+| `Connect-PowerBIServiceAccount` prints "browser will open" but hangs (no browser) | You're on PowerShell 7 (`pwsh`). Re-run the script with Windows PowerShell 5.1: `powershell -File "..."` instead of `pwsh -File "..."`. PS 5.1 uses an in-process WebBrowser COM auth dialog that doesn't depend on external browser launching. |
+| Auth fails | Run `az login` interactively (after Setup-CorpCertBundle if applicable), or set `azure_*` userConfig for SP auth |
 | Notebook deploys but cells run as one mega-cell | You shipped `.py` instead of `.ipynb` — the validator should catch this; rebuild |
 | `userConfig` prompt didn't fire on install | Edit `~/.claude/settings.json` directly under `pluginConfigs[fabric-dataflow-migration-toolkit].options` |
 | Background subagent stalls during notebook generation | Verify `approve-plugin-bash.py` hook fires; Fabric allowlist may need extension |

@@ -150,9 +150,21 @@ Otherwise, run the `fabric-preflight-check` skill via a single atomic Bash call:
 python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-preflight-check/scripts/preflight.py" --json
 ```
 
-Read its JSON output. If `status != "ok"`:
-- Print the remediation message from the skill output
-- Halt — do not proceed to Stage 0
+Read its JSON output. The envelope has three actionable fields:
+
+1. **`status`** — `"ok"` or `"fail"`. If `"fail"`, print the `remediation` array and **halt** before Stage 0.
+2. **`warnings`** — an array of objects `{name, message}`. These are non-blocking notices (currently: TLS-interception detection). For each warning, print it prominently to the user with a `WARNING:` prefix. Do NOT halt on warnings alone — they don't prevent discovery/build, only Stages 10–12 in live mode.
+3. **`checks`** — full per-check detail for diagnostic context.
+
+**Special handling for the `tls_interception` warning:** if present, also tell the user explicitly:
+
+> ⚠️ The pre-flight detected corporate TLS interception (your machine's Python-based tooling can't verify Microsoft endpoints). This will NOT block discovery (Stage 1a), export (Stage 2), or notebook generation (Stages 7–9, all local), but WILL block deployment + execution + validation (Stages 10–12) if you're running in live mode. The fix is one PowerShell command:
+>
+> ```powershell
+> powershell -File "${CLAUDE_PLUGIN_ROOT}/examples/Setup-CorpCertBundle.ps1"
+> ```
+>
+> Then restart your shell and re-launch the orchestrator. See README "Corporate environment setup" for details. You can defer this fix until you actually need live stages — proceed with `--dry-run` for now, or run the fix script before live execution.
 
 ### Stage 0 — Mode Detection
 
@@ -214,28 +226,24 @@ Then write a clear instruction to the user that **leads with prerequisites** and
 >    Accept the PSGallery trust prompt if it appears. The install takes ~30 seconds.
 > 3. **Power BI / Fabric account** — your sign-in must have access to at least one workspace that contains Gen1 dataflows.
 >
-> **Then run the script:**
+> **Then run the script — use Windows PowerShell 5.1, NOT pwsh 7:**
 >
 > ```powershell
-> pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1"
+> powershell -File "0 - Architecture Setup/Discover-AllDataflows.ps1"
 > ```
 >
 > Add `-Scope Organization` if you are a Power BI / Fabric admin and want every workspace in the tenant. Default is `-Scope Individual` (workspaces you are a member of).
+>
+> **Why Windows PowerShell 5.1 (`powershell`) and not pwsh 7 (`pwsh`)?**
+> `Connect-PowerBIServiceAccount` in pwsh 7 uses an MSAL-based external browser launch (`Process.Start("https://...")`) that silently hangs in many environments — `pwsh -File` invocations, VS Code integrated terminal, remote sessions, and corporate networks with TLS interception (Norton, Zscaler, etc.). PS 5.1 uses an in-process WebBrowser COM-hosted auth dialog that doesn't depend on the system's default-browser registration AND uses the Windows certificate store (which trusts any corporate root CA your IT installed). It works in every Windows environment we've tested.
 >
 > The script will write `0 - Architecture Setup/gen1-dataflow-inventory.csv` listing every accessible Gen1 dataflow. Open the CSV, pick the workspace(s) you want to migrate, and reply here with the `workspace_id` value (GUID).
 >
 > **Common issues and fixes:**
 >
 > - **"MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
-> - **The script prints "A browser window will open..." but no browser opens** — `Connect-PowerBIServiceAccount` cannot reliably auto-launch a browser in PowerShell 7 / `pwsh -File` / VS Code integrated terminal / remote sessions. Two fixes, in order of preference:
->   - Press Ctrl+C and re-run with `-UseDeviceCode`. The script prints a code + URL; open the URL in any browser, paste the code, sign in:
->     ```powershell
->     pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1" -UseDeviceCode
->     ```
->   - OR re-run with Windows PowerShell 5.1 (`powershell` instead of `pwsh`), which uses the older WebBrowser-based auth that more reliably launches the default browser:
->     ```powershell
->     powershell -File "0 - Architecture Setup/Discover-AllDataflows.ps1"
->     ```
+> - **Script hangs at "Connecting to Power BI Service"** — you're almost certainly running pwsh 7. Press Ctrl+C and re-run with Windows PowerShell 5.1: `powershell -File "..."` instead of `pwsh -File "..."`.
+> - **`az login` fails with SSL / cert errors** — `az` CLI uses Python's bundled cert store which does not trust corporate-proxy roots even when the Windows cert store does. Use the PS 5.1 path above instead of any az-based workaround.
 
 When the user replies with a workspace GUID, treat it as their `source_workspace_id` and proceed to Stage 1b. Record in Section 11 (Design Decisions Log) which workspace they picked and how many dataflows were in it per the CSV.
 
@@ -294,20 +302,18 @@ Then write a clear instruction to the user that **leads with prerequisites** (sk
 > pwsh -File "0 - Architecture Setup/Export-AllDataflows.ps1"
 > ```
 >
+> **Use Windows PowerShell 5.1, NOT pwsh 7:**
+>
+> ```powershell
+> powershell -File "0 - Architecture Setup/Export-AllDataflows.ps1"
+> ```
+>
 > It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `1 - Source Dataflows/`. Reply here when done.
 >
 > **Common issues and fixes:**
 >
 > - **"MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
-> - **The script prints "A browser window will open..." but no browser opens** — same root cause and fixes as Stage 1a discovery. Press Ctrl+C and either:
->   - Re-run with `-UseDeviceCode` (code + URL printed; paste into any browser):
->     ```powershell
->     pwsh -File "0 - Architecture Setup/Export-AllDataflows.ps1" -UseDeviceCode
->     ```
->   - OR re-run under Windows PowerShell 5.1:
->     ```powershell
->     powershell -File "0 - Architecture Setup/Export-AllDataflows.ps1"
->     ```
+> - **Script hangs at "Connecting to Power BI Service"** — running pwsh 7 instead of PS 5.1. Use `powershell -File ...`, not `pwsh -File ...`.
 
 Wait for user confirmation, then parse the JSONs:
 

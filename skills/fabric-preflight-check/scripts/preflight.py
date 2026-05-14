@@ -114,6 +114,72 @@ def check_workspace(workspace: str) -> dict:
     return {"name": "workspace_access", "pass": True, "detail": workspace}
 
 
+def check_tls_interception() -> dict:
+    """Probe whether Python's TLS stack trusts the chain served by a Microsoft endpoint.
+
+    If the probe fails with an SSL verification error, there is almost certainly a
+    corporate TLS-intercepting middlebox (Norton AV, Zscaler, Palo Alto, etc.)
+    re-signing connections with a root CA that is in the Windows certificate store
+    but NOT in Python's bundled certifi list. This breaks `az login`, `fab` CLI,
+    `pip` against PyPI, and every other Python tool that uses `requests`.
+
+    This check is **informational, not blocking** — it always returns pass=True so
+    it does not halt the preflight. If interception is detected, the returned dict
+    populates a `warning` field that the orchestrator surfaces to the user.
+
+    The fix (when this fires): run `examples/Setup-CorpCertBundle.ps1` once and
+    restart the shell. See README "Corporate environment setup".
+    """
+    try:
+        import ssl
+        import urllib.request
+        import urllib.error
+    except ImportError:
+        return {"name": "tls_interception", "pass": True, "detail": "skipped (stdlib unavailable)"}
+
+    probe_url = "https://api.fabric.microsoft.com/"
+    try:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(probe_url, method="HEAD")
+        urllib.request.urlopen(req, context=ctx, timeout=10)
+        return {
+            "name": "tls_interception",
+            "pass": True,
+            "detail": f"Python TLS trust chain to {probe_url} OK — no interception detected",
+        }
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", e)
+        msg = str(reason).lower()
+        if "certificate" in msg or "ssl" in msg or "cert verify" in msg or "self-signed" in msg or "unable to get local issuer" in msg:
+            return {
+                "name": "tls_interception",
+                "pass": True,  # informational — don't block on this
+                "detail": f"Python TLS verification failed against {probe_url}",
+                "warning": (
+                    "Corporate TLS interception detected. Python-based tools "
+                    "(`az login`, `fab` CLI, `pip` against PyPI) will fail with SSL errors "
+                    "at Stages 10–12 in live mode. Fix: run "
+                    "`powershell -File examples\\Setup-CorpCertBundle.ps1` once to augment "
+                    "Python's certifi bundle with the corporate root CA from the Windows "
+                    "certificate store, then restart the shell. See README "
+                    "\"Corporate environment setup\" for details. "
+                    f"Underlying error: {reason}"
+                ),
+            }
+        # Non-TLS error (DNS, network down, firewall block) — don't claim interception.
+        return {
+            "name": "tls_interception",
+            "pass": True,
+            "detail": f"could not probe {probe_url} ({reason}); skipping interception check",
+        }
+    except Exception as e:
+        return {
+            "name": "tls_interception",
+            "pass": True,
+            "detail": f"probe error ({type(e).__name__}: {e}); skipping",
+        }
+
+
 def check_lakehouse(workspace: str, lakehouse: str, label: str) -> dict:
     rc, out, err = run_cmd(["fab", "ls", workspace, "--type", "Lakehouse"], timeout=30)
     if rc != 0:
@@ -142,6 +208,11 @@ def main():
     args = parser.parse_args()
 
     checks = []
+    # TLS interception check runs first because its remediation (Setup-CorpCertBundle.ps1)
+    # is a prerequisite for the rest of the Python-based checks (az, fab) to succeed
+    # in corporate environments. The check itself does NOT block — it always passes —
+    # but emits a `warning` field that the orchestrator surfaces to the user.
+    checks.append(check_tls_interception())
     checks.append(check_fab_installed())
     if checks[-1]["pass"]:
         checks.append(check_azure_auth())
@@ -156,8 +227,9 @@ def main():
     all_pass = all(c["pass"] for c in checks)
     status = "ok" if all_pass else "fail"
     remediation = [c["remediation"] for c in checks if not c["pass"] and "remediation" in c]
+    warnings = [{"name": c["name"], "message": c["warning"]} for c in checks if c.get("warning")]
 
-    envelope = {"status": status, "checks": checks, "remediation": remediation}
+    envelope = {"status": status, "checks": checks, "remediation": remediation, "warnings": warnings}
 
     if args.json:
         print(json.dumps(envelope, indent=2))
@@ -166,6 +238,10 @@ def main():
         for c in checks:
             mark = "PASS" if c["pass"] else "FAIL"
             print(f"  [{mark}] {c['name']}: {c['detail']}")
+        if warnings:
+            print("\n=== Warnings ===")
+            for w in warnings:
+                print(f"  - [{w['name']}] {w['message']}")
         if not all_pass:
             print("\n=== Remediation ===")
             for r in remediation:
