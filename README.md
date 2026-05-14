@@ -268,7 +268,8 @@ _Documentation/
 |---|---|---|
 | Pre | `fabric-preflight-check` | Fail fast if auth/CLI missing |
 | 0 | Orchestrator | Detect fresh build vs. incremental |
-| 1 | Orchestrator | **(Interactive)** Workspace + lakehouse config |
+| 1a | Orchestrator | **(Interactive)** If user has no source workspace ID: generate `Discover-AllDataflows.ps1`, user runs it in PowerShell, picks a workspace from the resulting CSV |
+| 1b | Orchestrator | **(Interactive)** Workspace + lakehouse config |
 | 2 | `dataflow-gen1-extractor` | **(Interactive)** PowerShell export → .pq files |
 | 3 | `m-query-analyst` | Inventory + dependency map |
 | 4 | `m-query-analyst` | Risk catalog (12 patterns + unknowns) |
@@ -282,7 +283,7 @@ _Documentation/
 | 12 | `fabric-pipeline-validator` | Validate + assert row counts |
 | 13 | Orchestrator | Migration report |
 
-Three user touchpoints total. Everything else autonomous.
+Three user touchpoints total (plus an optional one-off discovery step at Stage 1a). Everything else autonomous.
 
 ---
 

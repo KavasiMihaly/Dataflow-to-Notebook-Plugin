@@ -176,10 +176,42 @@ Record mode in your TodoWrite list.
 
 ### Stage 1 — Configuration (User Touchpoint 1)
 
-Read `${CLAUDE_PLUGIN_OPTION_fabric_workspace_id}`, `${CLAUDE_PLUGIN_OPTION_source_workspace_id}`, etc. from environment. If any required value is empty AND `--sample` flag not set, ask via `AskUserQuestion`:
+Read `${CLAUDE_PLUGIN_OPTION_fabric_workspace_id}`, `${CLAUDE_PLUGIN_OPTION_source_workspace_id}`, etc. from environment.
+
+#### Stage 1a — Source-workspace discovery (only if source_workspace_id is empty AND `--sample` flag is NOT set)
+
+If the user has no `source_workspace_id` in their userConfig and is not using `--sample`, they may not know which workspace to migrate yet. Offer tenant-wide discovery via `AskUserQuestion`:
 
 ```
-1. Source Power BI workspace GUID (Gen1 dataflows source)
+Q: Do you already know the Power BI workspace ID containing the Gen1 dataflows you want to migrate?
+Options:
+  - "Yes, I have the workspace ID" — proceed to Stage 1b config Q&A and ask for it
+  - "No, generate a discovery script" — generate Discover-AllDataflows.ps1, instruct the user to run it, then re-ask once they have a workspace ID from the resulting CSV
+  - "I want to use the bundled samples instead" — switch to --sample mode (record this in Section 11) and skip discovery
+```
+
+If user picks **"No, generate a discovery script"**: run the generator as a single atomic Bash call:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/skills/dataflow-gen1-extractor/scripts/generate_discovery_script.py" --output "0 - Architecture Setup/Discover-AllDataflows.ps1" --csv-output "gen1-dataflow-inventory.csv"
+```
+
+Then write a clear instruction to the user and HALT until they reply with their chosen workspace ID:
+
+> **ACTION REQUIRED:** Run the following PowerShell script in a PowerShell terminal (NOT inside this Claude session — interactive browser auth is required):
+>
+> `pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1"`
+>
+> Add `-Scope Organization` if you are a Power BI admin and want every workspace in the tenant. The script will write `0 - Architecture Setup/gen1-dataflow-inventory.csv` listing every accessible Gen1 dataflow. Open the CSV, pick the workspace(s) you want to migrate, and reply with the `workspace_id` value (GUID) here.
+
+When the user replies with a workspace GUID, treat it as their `source_workspace_id` and proceed to Stage 1b. Record in Section 11 (Design Decisions Log) which workspace they picked and how many dataflows were in it per the CSV.
+
+#### Stage 1b — Config Q&A
+
+If any required value is empty AND `--sample` flag not set (and after Stage 1a discovery if it ran), ask via `AskUserQuestion`:
+
+```
+1. Source Power BI workspace GUID (Gen1 dataflows source) — pre-fill from Stage 1a if discovery ran
 2. Target Fabric workspace name (display name)
 3. Lakehouse names (bronze, silver) — accept defaults `lh_bronze`/`lh_silver` or override
 4. Auth method: interactive (az login) or service principal
@@ -187,7 +219,7 @@ Read `${CLAUDE_PLUGIN_OPTION_fabric_workspace_id}`, `${CLAUDE_PLUGIN_OPTION_sour
 
 Write Section 0 of `migration-design.md`.
 
-If `--sample` is set, hardcode:
+If `--sample` is set, hardcode and skip both Stage 1a and 1b:
 - Source workspace: `__sample__` (special marker — extractor will use bundled JSONs)
 - Target workspace: `__sample-fabric__`
 - Lakehouses: defaults

@@ -14,7 +14,29 @@ description: >
 
 Extract all Dataflow Gen1 definitions from a Power BI workspace and parse them into individual M query files with classification metadata.
 
-## Two-Step Process
+## Two-Step Process (plus optional Step 0 for discovery)
+
+### Step 0 (optional): Discover dataflows across all workspaces (PowerShell - user runs manually)
+
+If you don't know the workspace ID yet, generate a tenant-wide discovery script:
+
+```
+python scripts/generate_discovery_script.py --output "<TARGET_DIR>/Discover-AllDataflows.ps1"
+```
+
+Optional flags:
+- `--csv-output <name>` — Where the generated script writes its CSV (default: `gen1-dataflow-inventory.csv` next to the .ps1)
+- `--scope Organization` — Default scope baked into the script. `Individual` (default) lists workspaces the user is a member of; `Organization` lists every workspace in the tenant (Power BI admin only).
+
+The user runs the generated script manually in PowerShell (requires interactive browser auth):
+
+```powershell
+pwsh -File "<TARGET_DIR>/Discover-AllDataflows.ps1"
+# or to override scope at runtime:
+pwsh -File "<TARGET_DIR>/Discover-AllDataflows.ps1" -Scope Organization
+```
+
+**Output:** A CSV with one row per Gen1 dataflow across every accessible workspace. Columns: `workspace_name`, `workspace_id`, `workspace_type`, `workspace_capacity_id`, `dataflow_name`, `dataflow_id`, `modified_date`, `configured_by`, `description`. Use the CSV to pick which workspace(s) to migrate, then proceed to Step 1 with the chosen `workspace_id`.
 
 ### Step 1: Export (PowerShell - user runs manually)
 
@@ -44,8 +66,11 @@ python scripts/extract_m_from_json.py --source "<JSON_DIR>" --output "<OUTPUT_DI
 
 | Parameter | Step | Required | Description |
 |-----------|------|----------|-------------|
+| `--output` | 0 | Yes | Path for generated Discover-AllDataflows.ps1 |
+| `--csv-output` | 0 | No | CSV path inside the generated script (default: `gen1-dataflow-inventory.csv`) |
+| `--scope` | 0 | No | `Individual` (default) or `Organization` (admin) |
 | `--workspace-id` | 1 | Yes | Power BI workspace GUID |
-| `--output` | 1 | Yes | Path for generated .ps1 script |
+| `--output` | 1 | Yes | Path for generated Export-AllDataflows.ps1 |
 | `--json-dir` | 1 | No | Override JSON output directory in generated script (default: same as script location) |
 | `--source` | 2 | Yes | Directory containing exported JSON files |
 | `--output` | 2 | Yes | Directory for extracted .pq files |
