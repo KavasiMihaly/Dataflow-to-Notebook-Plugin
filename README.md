@@ -46,8 +46,12 @@ Before installing, make sure you have:
 
 - **Claude Code** — CLI, desktop app, or IDE extension
 - **Python** `>= 3.10` — for hook scripts and skill scripts
-- **PowerShell** `>= 5.1` (Windows) or **PowerShell 7+** (cross-platform) — for Dataflow Gen1 export
-  - With `MicrosoftPowerBIMgmt` PowerShell module
+- **PowerShell** `>= 5.1` (Windows) or **PowerShell 7+** (cross-platform) — for Dataflow Gen1 discovery and export
+  - With `MicrosoftPowerBIMgmt` PowerShell module — install once per user (no admin rights needed):
+    ```powershell
+    Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser
+    ```
+    Verify with `Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt`. The generated PowerShell scripts will error out with this install command if the module is missing.
 - **Microsoft Fabric CLI** — `pip install ms-fabric-cli` (the plugin's pre-flight check verifies this)
 - **Azure CLI** — `az login` for interactive auth, OR a service principal with workspace access
 - **Power BI workspace access** — Contributor or higher on the source workspace

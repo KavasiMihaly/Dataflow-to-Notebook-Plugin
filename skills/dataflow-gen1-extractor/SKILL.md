@@ -90,6 +90,11 @@ The parser auto-classifies each query:
 
 ## Prerequisites
 
-- PowerShell 5.1+ with `MicrosoftPowerBIMgmt` module
-- Python 3.10+ (standard library only - no pip installs needed)
-- User must have workspace access (Contributor or higher)
+- **PowerShell 5.1+** (Windows built-in) or **PowerShell 7+** (cross-platform).
+- **`MicrosoftPowerBIMgmt` PowerShell module.** Verify with `Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt`. If missing, install once per user (no admin rights needed):
+  ```powershell
+  Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser
+  ```
+  Both `Discover-AllDataflows.ps1` and `Export-AllDataflows.ps1` check for this module on startup and emit a clear error + install command if it's missing.
+- **Python 3.10+** (standard library only — no pip installs needed).
+- **Workspace access** — the user signing in must have Contributor or higher on every workspace they want to export. Discovery (Step 0) works on any workspace the user can see; export (Step 1) requires Contributor.

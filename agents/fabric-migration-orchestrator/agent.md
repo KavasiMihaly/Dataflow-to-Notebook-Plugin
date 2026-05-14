@@ -196,13 +196,35 @@ If user picks **"No, generate a discovery script"**: run the generator as a sing
 python "${CLAUDE_PLUGIN_ROOT}/skills/dataflow-gen1-extractor/scripts/generate_discovery_script.py" --output "0 - Architecture Setup/Discover-AllDataflows.ps1" --csv-output "gen1-dataflow-inventory.csv"
 ```
 
-Then write a clear instruction to the user and HALT until they reply with their chosen workspace ID:
+Then write a clear instruction to the user that **leads with prerequisites** and HALT until they reply with their chosen workspace ID. Use this exact template (substitute the appropriate scope hint):
 
-> **ACTION REQUIRED:** Run the following PowerShell script in a PowerShell terminal (NOT inside this Claude session — interactive browser auth is required):
+> **ACTION REQUIRED:** Run the discovery script in your own PowerShell terminal (NOT inside this Claude session — interactive browser auth is required).
 >
-> `pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1"`
+> **Prerequisites — verify ONCE before first run:**
 >
-> Add `-Scope Organization` if you are a Power BI admin and want every workspace in the tenant. The script will write `0 - Architecture Setup/gen1-dataflow-inventory.csv` listing every accessible Gen1 dataflow. Open the CSV, pick the workspace(s) you want to migrate, and reply with the `workspace_id` value (GUID) here.
+> 1. **PowerShell 5.1+** (Windows built-in) or **PowerShell 7+** (cross-platform). Check with `$PSVersionTable.PSVersion`.
+> 2. **`MicrosoftPowerBIMgmt` module** — required by `Connect-PowerBIServiceAccount` / `Get-PowerBIWorkspace` / `Invoke-PowerBIRestMethod`. Verify with:
+>    ```powershell
+>    Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt
+>    ```
+>    If nothing prints, install it (one-time, per user, no admin rights needed):
+>    ```powershell
+>    Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser
+>    ```
+>    Accept the PSGallery trust prompt if it appears. The install takes ~30 seconds.
+> 3. **Power BI / Fabric account** — your sign-in must have access to at least one workspace that contains Gen1 dataflows.
+>
+> **Then run the script:**
+>
+> ```powershell
+> pwsh -File "0 - Architecture Setup/Discover-AllDataflows.ps1"
+> ```
+>
+> Add `-Scope Organization` if you are a Power BI / Fabric admin and want every workspace in the tenant. Default is `-Scope Individual` (workspaces you are a member of).
+>
+> The script will write `0 - Architecture Setup/gen1-dataflow-inventory.csv` listing every accessible Gen1 dataflow. Open the CSV, pick the workspace(s) you want to migrate, and reply here with the `workspace_id` value (GUID).
+>
+> **If you hit "MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run the script. No other setup is needed.
 
 When the user replies with a workspace GUID, treat it as their `source_workspace_id` and proceed to Stage 1b. Record in Section 11 (Design Decisions Log) which workspace they picked and how many dataflows were in it per the CSV.
 
@@ -238,13 +260,32 @@ Else: generate the export script and ask the user to run it (PowerShell needs in
 python "${CLAUDE_PLUGIN_ROOT}/skills/dataflow-gen1-extractor/scripts/generate_export_script.py" --workspace-id "<GUID>" --output "0 - Architecture Setup/Export-AllDataflows.ps1"
 ```
 
-Then write a clear instruction to the user:
+Then write a clear instruction to the user that **leads with prerequisites** (skip the install step if the user already ran the Stage 1a discovery script — same prereq):
 
-> **ACTION REQUIRED:** Run the following PowerShell script in a PowerShell terminal:
+> **ACTION REQUIRED:** Run the export script in your own PowerShell terminal (NOT inside this Claude session — interactive browser auth is required).
 >
-> `pwsh -File "0 - Architecture Setup/Export-AllDataflows.ps1"`
+> **Prerequisites — verify ONCE before first run (same as Stage 1a discovery; skip if already done):**
 >
-> It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `1 - Source Dataflows/`. Reply when done.
+> 1. **PowerShell 5.1+** (Windows built-in) or **PowerShell 7+** (cross-platform).
+> 2. **`MicrosoftPowerBIMgmt` module:**
+>    ```powershell
+>    Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt
+>    ```
+>    If nothing prints, install (one-time, per user, no admin rights):
+>    ```powershell
+>    Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser
+>    ```
+> 3. **Workspace access** — your sign-in must have Contributor or higher on the source workspace.
+>
+> **Then run the script:**
+>
+> ```powershell
+> pwsh -File "0 - Architecture Setup/Export-AllDataflows.ps1"
+> ```
+>
+> It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `1 - Source Dataflows/`. Reply here when done.
+>
+> **If you hit "MicrosoftPowerBIMgmt module is not installed"** — run the `Install-Module` command above, then re-run.
 
 Wait for user confirmation, then parse the JSONs:
 
