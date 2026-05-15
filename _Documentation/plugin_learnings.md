@@ -213,6 +213,24 @@ The builder's envelope was honest — it really did write the file. The hook del
 
 **Discovered:** 2026-05-14 during live-test run #1 against the user's corporate-network Windows machine. Reproduced and isolated as a TLS-interception problem (not a tool bug, not an auth bug) by checking the cert chain — issuer was `Norton Web/Mail Shield Root`, not DigiCert.
 
+### N13 — PowerShell scripts must be UTF-8 with BOM (or pure ASCII) for PS 5.1
+
+**Symptom:** A generated `Discover-AllDataflows.ps1` parsed cleanly under `pwsh 7` (verified via `[System.Management.Automation.Language.Parser]::ParseFile()`) but failed under Windows PowerShell 5.1 (`powershell -File`) with cascading "The string is missing the terminator: \"." errors pointing at correctly-closed strings several lines below where the real problem actually was. Earlier orchestrator diagnosis blamed an unrelated `<GUID>` placeholder inside a single-quoted string; that diagnosis was wrong.
+
+**Root cause:** PS 5.1's file reader, when there is no UTF-8 BOM, falls back to the OS default code page (typically Windows-1252 in en-US installs). A single UTF-8 em-dash character `—` (U+2014, byte sequence `0xE2 0x80 0x94`) becomes three separate Windows-1252 characters when misinterpreted: `â`, `€`, and `”` (U+201D right double quote). When the em-dash sits inside a double-quoted string, the spurious `”` closes the string early, and PS 5.1 then tries to parse the remainder as code — manifesting as "missing terminator" errors many lines later. Same hazard applies to en-dashes, smart quotes, ellipses, arrows, any character outside the 7-bit ASCII range.
+
+`pwsh 7` reads UTF-8 by default and does not have this hazard. The user-facing test environment runs `powershell -File` deliberately (PS 5.1's WebBrowser COM auth is the only auth path that survives corporate TLS interception — see N12), so the bug only fires after the *correct* fix for N12 is applied. This is a particularly cruel ordering: the more carefully a user follows the documented advice, the more likely they are to hit it.
+
+**Fix:** two-layer defense:
+
+1. **Write all generated PowerShell scripts as UTF-8 with BOM** — Python: `open(path, "w", encoding="utf-8-sig")` or `Path.write_text(content, encoding="utf-8-sig")`. The BOM is `0xEF 0xBB 0xBF`; PS 5.1 recognizes it and switches to UTF-8 mode. Existing pre-PS 5 readers also handle it gracefully.
+2. **Avoid non-ASCII characters inside PowerShell string literals** anyway, even with the BOM — defense in depth. ASCII hyphens (`-`, `--`), arrows (`->`), and plain quotes (`"`, `'`) read identically under every code page. Reserve UTF-8 multibyte characters for Markdown / Python source where the encoding is unambiguous.
+3. **Audit existing PowerShell content** for em-dashes, en-dashes, smart quotes, arrows, ellipses, degree signs, and other common typographic Unicode. Static `.ps1` files in the repo: rewrite as UTF-8 with BOM via a one-shot Python script. Generated `.ps1`: fix the Python templates AND switch the writer to `utf-8-sig`.
+
+**Reusable rule for future plugin builds:** Any tooling that *generates* PowerShell, batch, or other Windows-script files MUST default to UTF-8 with BOM. Any *static* PowerShell content checked into a repo MUST either be UTF-8-with-BOM or strictly 7-bit ASCII. Don't trust that "the orchestrator parsed the script and said it was fine" — ensure your parse-check uses the same PowerShell edition (5.1 vs 7) the user will run, because the parsers diverge silently on encoding handling. The fabric plugin's `generate_discovery_script.py` and `generate_export_script.py` both now use `encoding="utf-8-sig"`; `examples/Setup-CorpCertBundle.ps1` was prepended with a BOM in-place.
+
+**Discovered:** 2026-05-15. Confirmed by parsing the regenerated script with `powershell.exe -Command [Parser]::ParseFile(...)` — clean — and contrasting with the original which produced the observed cascade.
+
 ---
 
 ## Open questions for first fresh-install run

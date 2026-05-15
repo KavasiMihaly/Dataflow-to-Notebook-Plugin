@@ -202,7 +202,10 @@ def main():
         json_dir=args.json_dir.replace("\\", "\\\\"),
     )
 
-    output_path.write_text(script_content, encoding="utf-8")
+    # Write with UTF-8 BOM so PowerShell 5.1 correctly recognizes UTF-8 encoding.
+    # See generate_discovery_script.py for full explanation of the multi-byte
+    # misinterpretation hazard under PS 5.1's default code-page reader.
+    output_path.write_text(script_content, encoding="utf-8-sig")
     print(f"Generated: {output_path}")
     print(f"Workspace: {args.workspace_id}")
     print(f"JSON dir:  {args.json_dir}")

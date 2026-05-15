@@ -6,7 +6,7 @@ Auth model: uses the `MicrosoftPowerBIMgmt` module's `Connect-PowerBIServiceAcco
 The script is designed to be run under **Windows PowerShell 5.1** (the
 `powershell.exe` host), which uses an in-process WebBrowser COM control for the
 OAuth dialog. That code path is more reliable than PowerShell 7's MSAL-based
-external-browser launch — particularly in environments with corporate TLS
+external-browser launch -- particularly in environments with corporate TLS
 interception (Norton, Zscaler, Palo Alto) where the system cert store trusts the
 interceptor's root CA but Python-based tools like `az` CLI do not.
 
@@ -38,7 +38,7 @@ TEMPLATE = r'''<#
     Requires: MicrosoftPowerBIMgmt PowerShell module
               (Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser)
     Auth:     Interactive browser via WebBrowser COM (PS 5.1) or system browser
-              (pwsh 7 — may fail to launch).
+              (pwsh 7 -- may fail to launch).
 
 .EXAMPLE
     # Recommended invocation (Windows PowerShell 5.1):
@@ -142,7 +142,7 @@ foreach ($Ws in $Workspaces) {{
         $Dataflows = $Response.value
     }}
     catch {{
-        Write-Host " [skip — no access or no dataflows endpoint]" -ForegroundColor DarkGray
+        Write-Host " [skip -- no access or no dataflows endpoint]" -ForegroundColor DarkGray
         $SkippedCount++
         continue
     }}
@@ -196,7 +196,7 @@ $Inventory | Group-Object workspace_name | Sort-Object Count -Descending | ForEa
 }}
 
 Write-Host "`nPick one or more workspace_id values from the CSV, then re-launch the orchestrator:"
-Write-Host '  claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace <GUID>"' -ForegroundColor Yellow
+Write-Host '  claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "Migrate dataflows from workspace YOUR-WORKSPACE-GUID"' -ForegroundColor Yellow
 
 # --- Disconnect ---
 Disconnect-PowerBIServiceAccount -ErrorAction SilentlyContinue | Out-Null
@@ -230,7 +230,12 @@ def main():
         csv_output=args.csv_output.replace("\\", "\\\\"),
     )
 
-    output_path.write_text(script_content, encoding="utf-8")
+    # Write with UTF-8 BOM so PowerShell 5.1 correctly recognizes UTF-8 encoding.
+    # Without a BOM, PS 5.1 falls back to the OS code page (typically Windows-1252)
+    # and misinterprets any multi-byte UTF-8 sequence -- e.g. an em-dash (U+2014)
+    # becomes 3 chars including a right-double-quote that prematurely terminates
+    # string literals, cascading into "missing terminator" parse errors.
+    output_path.write_text(script_content, encoding="utf-8-sig")
     print(f"Generated: {output_path}")
     print(f"Default scope: {args.scope}")
     print(f"CSV output (relative to script): {args.csv_output}")

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Augments Python's certifi CA bundle with corporate root CAs from the Windows
     certificate store, then sets REQUESTS_CA_BUNDLE so az CLI, fab CLI, and any
@@ -25,7 +25,7 @@
               Windows PowerShell 5.1 or pwsh 7. Run from any shell.
     Effect:   Per-user environment variable. No admin rights needed.
     Reverse:  Set REQUESTS_CA_BUNDLE to empty or delete it from User env vars
-              (System Properties → Environment Variables).
+              (System Properties -> Environment Variables).
 
 .EXAMPLE
     powershell -File .\Setup-CorpCertBundle.ps1
@@ -119,7 +119,7 @@ foreach ($cert in $allRoots) {
     }
 }
 if ($detected.Count -gt 0) {
-    Write-Host "TLS interceptor root(s) detected — these are exactly what need to be trusted by Python:" -ForegroundColor Yellow
+    Write-Host "TLS interceptor root(s) detected -- these are exactly what need to be trusted by Python:" -ForegroundColor Yellow
     foreach ($d in $detected | Select-Object -Unique) {
         Write-Host "  $d" -ForegroundColor DarkYellow
     }
