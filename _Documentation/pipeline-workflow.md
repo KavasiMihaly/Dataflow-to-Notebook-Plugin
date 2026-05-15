@@ -31,9 +31,9 @@ The orchestrator runs in the user's working directory. All paths are relative to
 
 Three interactive touchpoints. Everything else autonomous.
 
-1. **Stage 1: Config Q&A** — workspace + lakehouse selections (skipped if userConfig set)
-2. **Stage 5: Refactor decisions** — dynamic 3-4 questions via `migration-analyst`
-3. **Stage 6: Plan approval** — native plan-mode summary
+1. **Stage 1: Config Q&A** — workspace + lakehouse selections (skipped if userConfig set), plus optional Stage 1a tenant-wide dataflow discovery for users without a workspace ID
+2. **Stage 6: Refactor decisions** — dynamic 3-4 questions via `migration-analyst`
+3. **Stage 7: Design approval** — `AskUserQuestion`-based Approve / Revise / Abort gate
 
 A fourth conditional touchpoint: **deviation escalation** at Stages 8, 9, or 10 if a builder/deployer can't satisfy its prompt. Only fires on contract breaks — clean runs never hit it.
 
@@ -46,14 +46,14 @@ All design decisions, plans, build outputs, and validation results live in **`1 
 | Section | Owner | When written |
 |---|---|---|
 | 0. Configuration | orchestrator | Stage 1 |
-| 1. Migration Goals | `migration-analyst` direct | Stage 5 |
-| 2. Dataflow Inventory | orchestrator from m-query-analyst JSON | Stage 3 |
-| 3. Risk Catalog | orchestrator from m-query-analyst JSON | Stage 4 |
-| 4. Dependency Map | orchestrator from m-query-analyst JSON | Stage 3 |
-| 5. Refactor Decisions | `migration-analyst` direct | Stage 5 |
-| 6. Medallion Mapping | orchestrator | Stage 5 |
-| 7. Bronze Build Plan | orchestrator drafts; bronze builders fill rows | Stage 5 + 8 |
-| 8. Silver Build Plan | orchestrator drafts; silver builders fill rows | Stage 5 + 9 |
+| 1. Migration Goals | `migration-analyst` direct | Stage 6 |
+| 2. Dataflow Inventory | orchestrator from m-query-analyst JSON | Stage 4 |
+| 3. Risk Catalog | orchestrator from m-query-analyst JSON | Stage 5 |
+| 4. Dependency Map | orchestrator from m-query-analyst JSON | Stage 4 |
+| 5. Refactor Decisions | `migration-analyst` direct | Stage 6 |
+| 6. Medallion Mapping | orchestrator | Stage 6 |
+| 7. Bronze Build Plan | orchestrator drafts; bronze builders fill rows | Stage 6 + 8 |
+| 8. Silver Build Plan | orchestrator drafts; silver builders fill rows | Stage 6 + 9 |
 | 9. Created Notebooks Registry | orchestrator | After every successful build |
 | 10. Validation Results | `fabric-pipeline-validator` direct | Stage 12 |
 | 11. Design Decisions Log | orchestrator | Throughout |
@@ -63,15 +63,15 @@ All design decisions, plans, build outputs, and validation results live in **`1 
 
 | Stage | Owner | Mode | Side effects |
 |---|---|---|---|
-| Pre | `fabric-preflight-check` | Auto | Fail fast if `fab` / `az login` missing |
+| Pre | `fabric-preflight-check` | Auto | Fail fast if `fab` / `az login` missing; emit TLS-interception warning if Python can't verify Microsoft endpoints (does not block) |
 | 0 | Orchestrator | Auto | Detect fresh build vs incremental |
-| 1 | Orchestrator | Interactive | Ask config (workspace, lakehouses) |
-| 2 | `dataflow-gen1-extractor` | Interactive (PowerShell auth) | Export Gen1 JSON → parse to .pq files |
-| 3 | `m-query-analyst` Pass 1 | Background | Inventory, classification, dependency map |
-| 4 | `m-query-analyst` Pass 2 | Background | Risk catalog scan; backlog entries for unknowns |
-| 5 | `migration-analyst` | Interactive | Refactor + strategy decisions |
-| 6 | Orchestrator | Plan mode | User approves medallion mapping |
-| 7 | `fabric-project-initializer` | Auto | Project scaffolding |
+| 1 | Orchestrator | Interactive | Ask config (workspace, lakehouses); Stage 1a optionally generates tenant-wide discovery script |
+| 2 | `fabric-project-initializer` | Auto | Project scaffolding + copy plugin reference materials into `6 - Agentic Resources/reference/` (skip if incremental) |
+| 3 | `dataflow-gen1-extractor` | Interactive (PowerShell auth) | Export Gen1 JSON → parse to .pq files |
+| 4 | `m-query-analyst` Pass 1 | Background | Inventory, classification, dependency map |
+| 5 | `m-query-analyst` Pass 2 | Background | Risk catalog scan; backlog entries for unknowns. Reads catalog from project-local `6 - Agentic Resources/reference/` (copied at Stage 2) |
+| 6 | `migration-analyst` | Interactive | Refactor + strategy decisions |
+| 7 | Orchestrator | Interactive (AskUserQuestion) | User approves medallion mapping; Approve / Revise / Abort |
 | 8 | `fabric-bronze-builder` × N | Background parallel | Bronze .ipynb generation |
 | 9 | `fabric-silver-builder` × N | Background canary + parallel | Silver .ipynb (read_bronze() only) |
 | 10 | `fabric-notebook-deployer` | Auto (skip in dry-run) | `fab import` per notebook |

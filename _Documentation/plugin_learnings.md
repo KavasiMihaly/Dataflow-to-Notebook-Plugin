@@ -35,7 +35,7 @@ The plugin ships `hooks/approve-plugin-bash.py` with a Fabric-specific allowlist
 - `pwsh -File ...Export-AllDataflows.ps1` (Stage 2 export)
 - Filesystem discovery (`ls`, `find -name "*.pq"`, `find -name "*.ipynb"`)
 - `grep` for risk-pattern scanning (m-query-analyst Pass 2)
-- Bundled-sample copy (`cp -r ${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/. "1 - Source Dataflows/"`)
+- Bundled-sample copy (`cp -r ${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/. "2 - Source Files/dataflow-json/"`)
 
 ### F5 — userConfig env var remap
 
@@ -230,6 +230,63 @@ The builder's envelope was honest — it really did write the file. The hook del
 **Reusable rule for future plugin builds:** Any tooling that *generates* PowerShell, batch, or other Windows-script files MUST default to UTF-8 with BOM. Any *static* PowerShell content checked into a repo MUST either be UTF-8-with-BOM or strictly 7-bit ASCII. Don't trust that "the orchestrator parsed the script and said it was fine" — ensure your parse-check uses the same PowerShell edition (5.1 vs 7) the user will run, because the parsers diverge silently on encoding handling. The fabric plugin's `generate_discovery_script.py` and `generate_export_script.py` both now use `encoding="utf-8-sig"`; `examples/Setup-CorpCertBundle.ps1` was prepended with a BOM in-place.
 
 **Discovered:** 2026-05-15. Confirmed by parsing the regenerated script with `powershell.exe -Command [Parser]::ParseFile(...)` — clean — and contrasting with the original which produced the observed cascade.
+
+### N14 — Background subagents cannot read plugin-cache paths; copy references into the project at scaffold time
+
+**Symptom:** The risk-scan subagent (`m-query-analyst` Pass 2, spawned in background) hit a permissions block reading `${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md`. Without the catalog, the scan can't classify any of the discovered M patterns and the pipeline either halts or produces an empty risks JSON.
+
+**Root cause:** Background subagents run with restricted filesystem permissions and CANNOT read files outside the project's working directory — including paths inside the plugin cache (`~/.claude/plugins/cache/.../reference/...`). The orchestrator referenced these paths in the subagent prompts assuming any agent invoked from the orchestrator inherits its read scope. That assumption is wrong for backgrounded `Task()` calls.
+
+**Secondary finding (uncovered while fixing N14):** the orchestrator's stage ordering was also wrong. Stage 7 was project scaffolding, but Stages 2–6 (export, inventory, risk scan, refactor, approval) all wrote into the project structure that Stage 7 was supposed to create. The folders were being created ad-hoc during earlier stages because `cp` / `mv` auto-creates parent directories, leading to duplicates like the simultaneous `1 - Documentation/` (initializer) and `1 - Source Dataflows/` (Stage 2 export — wrong prefix, conflicting number).
+
+**Fix:** two coordinated changes:
+
+1. **Moved scaffolding earlier.** Stage 7 (Project Scaffolding) is now Stage 2, between config Q&A and export. Old Stages 2–6 became Stages 3–7. Scaffolding now runs BEFORE any other stage writes into the project, so the folder layout is always in place.
+
+2. **Scaffolder copies plugin reference materials into the project.** `fabric-project-initializer` always copies `${CLAUDE_PLUGIN_ROOT}/reference/*` into `6 - Agentic Resources/reference/` at scaffold time (this behavior already existed; the fix was making sure scaffolding runs before any subagent that needs them). The orchestrator's Stage 5 (risk scan) and Stage 8/9 (builder) prompts now point at `6 - Agentic Resources/reference/m-conversion-risk-catalog.md` (project-local) instead of `${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md` (plugin cache).
+
+**Reusable rule for future plugin builds:** Any reference file, template, or read-only resource that background subagents need MUST live in the project's working directory by the time the subagent fires — not in the plugin's installation cache. Three patterns work:
+
+- **Copy at scaffold time** (used here). Project initializer copies plugin reference materials into the project once; subagent prompts use project-local paths from then on. Best when references are small and stable.
+- **Pass the content inline in the subagent prompt** (alternative). Orchestrator reads the plugin-cache file itself (its permissions are unrestricted), embeds the content into the subagent's prompt string. Best when references are very small and changes shouldn't require a project re-scaffold.
+- **Make the subagent foreground** (escape hatch). Foreground subagents have the orchestrator's permission scope and CAN read plugin-cache paths. But this defeats parallel-fan-out designs and ties up the orchestrator's interactive channel. Use only when the other two patterns don't apply.
+
+Also: when stages produce filesystem artifacts that later stages depend on, **the stage ordering must match the dependency order**. Stage 7 producing folders that Stages 2–6 already wrote into is a textbook ordering bug — caught here only by a user noticing the duplicate numbered folder prefix. Linting idea for future plugin audits: each stage prompt declares the paths it writes to and the paths it reads from; the audit checks that no read path appears before its write path in the stage sequence.
+
+**Discovered:** 2026-05-15 during second wave of live-test runs against the user's corporate-network Windows machine, after fixing N12 (TLS interception) and N13 (PS 5.1 encoding) unblocked the discovery flow.
+
+### N15 — `AskUserQuestion` is NOT available in any subagent, regardless of foreground/background
+
+**Symptom:** Stage 5/6 (Refactor Q&A) in the orchestrator spawned `migration-analyst` with `run_in_background: false` and `tools: ..., AskUserQuestion` in the analyst's frontmatter. The analyst nonetheless reported that `AskUserQuestion` was not available, wrote sensible default values to Sections 1+5 of migration-design.md, and asked the orchestrator to confirm them via the parent's user channel. The 0.2.0 N9 fix ("spawn foreground for interactive subagents") was based on a wrong premise.
+
+**Root cause:** Documented explicitly in the [Claude Agent SDK user-input docs](https://code.claude.com/docs/en/agent-sdk/user-input.md) under Limitations:
+
+> **Subagents:** `AskUserQuestion` is not currently available in subagents spawned via the Agent tool.
+
+This is a hard restriction, not foreground/background-dependent. Listing the tool in a subagent's `tools:` frontmatter has no effect — the orchestrator's main session is the only place `AskUserQuestion` works. N9's earlier "spawn foreground for AskUserQuestion access" advice was therefore wrong; the correct rule (supersedes N9 for the interactive-tool case specifically) is: **the parent always owns interactive Q&A; subagents are purely deterministic specialists**.
+
+**Fix (implemented in 0.3.0):** Refactored Stage 6 into a three-sub-step parent-owned pattern:
+
+- **6a — Analyst in `Mode: analyze`** reads inventory + risks, returns JSON envelope `1 - Documentation/refactor-questions.json` listing applicable questions with their options. Pure analysis, no user interaction.
+- **6b — Orchestrator** reads the envelope, calls `AskUserQuestion` itself with the questions array, writes the user's chosen labels to `1 - Documentation/refactor-answers.json`.
+- **6c — Analyst in `Mode: write`** reads inventory + risks + answers, writes Sections 1+5 of `migration-design.md` deterministically.
+
+Both analyst spawns run in background; neither needs `AskUserQuestion`. The analyst's `tools:` frontmatter no longer claims `AskUserQuestion`.
+
+**Reusable rule for future plugin builds:** any time an orchestrator design sketches "specialist subagent that asks the user something," restructure into a three-sub-step parent-owned pattern:
+
+1. Subagent emits JSON envelope of questions/decisions to be made
+2. Parent calls `AskUserQuestion` with the envelope
+3. Subagent consumes answers and produces the side-effecting outputs
+
+This is the same shape as the SDK's documented graceful-degradation behavior — when a subagent hits `AskUserQuestion`, it falls back to writing defaults and asking the parent. Codifying this as the FIRST design (rather than the FALLBACK) makes the pipeline deterministic and removes a class of silent-failure bugs.
+
+**Companion N15 corrections to earlier findings:**
+
+- **N9 was partially wrong.** N9 said "spawn interactive subagents in foreground." That advice helps for some interactive tools (permission prompts pass through to the user in foreground), but NOT for `AskUserQuestion` which is hard-restricted from subagents entirely. The complete rule is: AskUserQuestion only lives in the parent; foreground vs background is irrelevant to its availability.
+- **N10's plan-mode parallel.** N10 noted plan-mode silently no-ops when `EnterPlanMode` isn't in the orchestrator's tools. The same class as N15: an interactive tool unavailable in a context where the code assumed it would be. Both findings now resolve to the same parent-side pattern — parent owns the interaction, subagent prepares/consumes structured data.
+
+**Discovered:** 2026-05-15 during live-test run. Validated via claude-code-guide agent fetching the SDK Limitations docs directly.
 
 ---
 

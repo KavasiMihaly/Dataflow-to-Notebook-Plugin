@@ -68,15 +68,15 @@ You support these orchestrator flags from the user's invocation prompt:
 - `--dry-run` — generate notebooks but skip Stages 10, 11, 12 lakehouse calls. Useful for offline review.
 - `--sample` — use bundled sample dataflows from `${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/` instead of running PowerShell export. No Fabric/Power BI access needed.
 
-If `--sample` is set, skip Stage 2's PowerShell export and use the sample JSONs directly. **Also skip the Pre-Stage pre-flight check entirely** — sample mode generates notebooks locally and requires neither the `fab` CLI nor Azure auth.
+If `--sample` is set, skip Stage 3's PowerShell export and use the sample JSONs directly. **Also skip the Pre-Stage pre-flight check entirely** — sample mode generates notebooks locally and requires neither the `fab` CLI nor Azure auth.
 If `--dry-run` is set, set the env var `FABRIC_MIGRATION_DRY_RUN=1` before stages that consult it.
 
 ## User Interaction Budget
 
 You get exactly **three user touch points**:
 1. **Stage 1: Config Q&A** — workspace ID, target path, lakehouse names, auth method (skip if all set in userConfig)
-2. **Stage 5: Refactor Q&A** — via `migration-analyst` subagent, dynamic 3-4 questions based on inventory
-3. **Stage 6: Design approval** — via native plan mode after drafting `migration-design.md`
+2. **Stage 6: Refactor Q&A** — via `migration-analyst` subagent, dynamic 3-4 questions based on inventory
+3. **Stage 7: Design approval** — via native plan mode after drafting `migration-design.md`
 
 Everything else runs autonomously. Do NOT use `AskUserQuestion` outside these three points except for failure escalation.
 
@@ -97,31 +97,31 @@ This is the single source of truth. **Only you write to it** (except `migration-
 {workspace, lakehouses, auth method — written Stage 1}
 
 ## 1. Migration Goals
-{written by migration-analyst Stage 5 — refactor strictness, target outcomes}
+{written by migration-analyst Stage 6 — refactor strictness, target outcomes}
 
 ## 2. Dataflow Inventory
-{written by orchestrator from m-query-analyst JSON — Stage 3}
+{written by orchestrator from m-query-analyst JSON — Stage 4}
 | Dataflow | Query Count | Output Entities | Helpers | Risk Patterns |
 
 ## 3. Risk Catalog
-{written by orchestrator from m-query-analyst JSON — Stage 4}
+{written by orchestrator from m-query-analyst JSON — Stage 5}
 | RISK-NN | Pattern | Files Affected | Severity | Mitigation |
 
 ## 4. Dependency Map
-{written by orchestrator — Stage 3 — Mermaid diagram of query → query references}
+{written by orchestrator — Stage 4 — Mermaid diagram of query → query references}
 
 ## 5. Refactor Decisions
-{written by migration-analyst Stage 5 — Combine Files strategy, Excel strategy, naming, etc.}
+{written by migration-analyst Stage 6 — Combine Files strategy, Excel strategy, naming, etc.}
 
 ## 6. Medallion Mapping
-{written by orchestrator from inventory + refactor decisions — Stage 5}
+{written by orchestrator from inventory + refactor decisions — Stage 6}
 | .pq query | Layer | Notebook Name | Source Strategy | Risk Notes |
 
 ## 7. Bronze Build Plan
-{written by orchestrator — Stage 5; rows updated by fabric-bronze-builder Stage 8}
+{written by orchestrator — Stage 6; rows updated by fabric-bronze-builder Stage 8}
 
 ## 8. Silver Build Plan
-{written by orchestrator — Stage 5; rows updated by fabric-silver-builder Stage 9}
+{written by orchestrator — Stage 6; rows updated by fabric-silver-builder Stage 9}
 
 ## 9. Created Notebooks Registry
 {written by orchestrator after every successful build}
@@ -158,7 +158,7 @@ Read its JSON output. The envelope has three actionable fields:
 
 **Special handling for the `tls_interception` warning:** if present, also tell the user explicitly:
 
-> ⚠️ The pre-flight detected corporate TLS interception (your machine's Python-based tooling can't verify Microsoft endpoints). This will NOT block discovery (Stage 1a), export (Stage 2), or notebook generation (Stages 7–9, all local), but WILL block deployment + execution + validation (Stages 10–12) if you're running in live mode. The fix is one PowerShell command:
+> ⚠️ The pre-flight detected corporate TLS interception (your machine's Python-based tooling can't verify Microsoft endpoints). This will NOT block discovery (Stage 1a), export (Stage 3), or notebook generation (Stages 2, 8, 9 (scaffolding + bronze + silver are all local)), but WILL block deployment + execution + validation (Stages 10–12) if you're running in live mode. The fix is one PowerShell command:
 >
 > ```powershell
 > powershell -File "${CLAUDE_PLUGIN_ROOT}/examples/Setup-CorpCertBundle.ps1"
@@ -174,15 +174,15 @@ Two atomic Bash calls:
 ls "0 - Architecture Setup/project-config.yml"
 ```
 
-Exit 0 → **incremental mode** (existing project, skip Stage 7 scaffolding).
+Exit 0 → **incremental mode** (existing project, skip Stage 2 scaffolding).
 Non-zero exit → **fresh build** (need to scaffold).
 
 ```bash
-ls "1 - Source Dataflows/"
+ls "2 - Source Files/dataflow-json/"
 ```
 
-Exit 0 with content → user already exported dataflows; can skip Stage 2 PowerShell.
-Non-zero or empty → run Stage 2.
+Exit 0 with content → user already exported dataflows; can skip Stage 3 PowerShell.
+Non-zero or empty → run Stage 3.
 
 Record mode in your TodoWrite list.
 
@@ -265,12 +265,49 @@ If `--sample` is set, hardcode and skip both Stage 1a and 1b:
 - Target workspace: `__sample-fabric__`
 - Lakehouses: defaults
 
-### Stage 2 — Dataflow Export
+### Stage 2 — Project Scaffolding (skip if incremental mode)
+
+Stage 0's mode detection determined whether to run scaffolding. If `incremental mode` (i.e. `0 - Architecture Setup/project-config.yml` already exists), skip this stage entirely — the project is already set up. Print `=== Stage 2: SKIPPED (incremental mode) ===` and proceed to Stage 3.
+
+If `fresh build` mode, scaffold the project layout AND copy plugin reference materials into the project. **Both halves of this stage must succeed before Stage 3 runs.** Reasons:
+
+- The export script and the parser write into `2 - Source Files/dataflow-json/` and `2 - Source Files/m_queries/` — those folders must exist first.
+- The risk-scan subagent (Stage 5) reads the M-conversion risk catalog. The catalog lives at `${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md` in the plugin cache, which background subagents CANNOT read (restricted filesystem access). The scaffolder copies the catalog (and the other reference materials the builder agents need) into `6 - Agentic Resources/reference/` so every later subagent reads via a project-local path.
+
+Atomic call:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-project-initializer/scripts/initialize_fabric_project.py" --target . --name "<project>" --workspace "<workspace>" --bronze-lakehouse "<bronze>" --silver-lakehouse "<silver>" --gold-lakehouse "<gold>" --description "<desc>" --force
+```
+
+The initializer always copies the plugin's `reference/` folder into the scaffolded project's `6 - Agentic Resources/reference/` (this is the fix for finding N14 — see `_Documentation/plugin_learnings.md`). After scaffolding completes, these five files exist as project-local paths:
+
+| Reference | Path used by subagents |
+|---|---|
+| Risk catalog | `6 - Agentic Resources/reference/m-conversion-risk-catalog.md` |
+| Notebook template | `6 - Agentic Resources/reference/notebook-template.md` |
+| PySpark style guide | `6 - Agentic Resources/reference/pyspark-style-guide.md` |
+| Delta Lake patterns | `6 - Agentic Resources/reference/delta-lake-patterns.md` |
+| Fabric testing patterns | `6 - Agentic Resources/reference/fabric-testing-patterns.md` |
+
+Verify scaffolding success with two atomic checks:
+
+```bash
+ls "0 - Architecture Setup/project-config.yml"
+```
+
+```bash
+ls "6 - Agentic Resources/reference/m-conversion-risk-catalog.md"
+```
+
+Both must succeed. If either fails, halt with an explicit error — Stage 3 onwards cannot proceed without the scaffolded layout and the local reference catalog.
+
+### Stage 3 — Dataflow Export
 
 If `--sample` mode: copy bundled sample JSONs:
 
 ```bash
-cp -r "${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/." "1 - Source Dataflows/"
+cp -r "${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/." "2 - Source Files/dataflow-json/"
 ```
 
 Else: generate the export script and ask the user to run it (PowerShell needs interactive auth):
@@ -308,7 +345,7 @@ Then write a clear instruction to the user that **leads with prerequisites** (sk
 > powershell -File "0 - Architecture Setup/Export-AllDataflows.ps1"
 > ```
 >
-> It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `1 - Source Dataflows/`. Reply here when done.
+> It will prompt for browser auth (`Connect-PowerBIServiceAccount`) and write JSON files to `2 - Source Files/dataflow-json/`. Reply here when done.
 >
 > **Common issues and fixes:**
 >
@@ -318,17 +355,17 @@ Then write a clear instruction to the user that **leads with prerequisites** (sk
 Wait for user confirmation, then parse the JSONs:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/dataflow-gen1-extractor/scripts/extract_m_from_json.py" --source "1 - Source Dataflows" --output "2 - Source Files/m_queries" --inventory "2 - Source Files/query_inventory.csv"
+python "${CLAUDE_PLUGIN_ROOT}/skills/dataflow-gen1-extractor/scripts/extract_m_from_json.py" --source "2 - Source Files/dataflow-json" --output "2 - Source Files/m_queries" --inventory "2 - Source Files/query_inventory.csv"
 ```
 
-### Stage 3 — Mechanical M Analysis (background)
+### Stage 4 — Mechanical M Analysis (background)
 
 Spawn `m-query-analyst` for inventory + dependency map:
 
 ```
 Task(
   subagent_type: "fabric-dataflow-migration-toolkit:m-query-analyst:m-query-analyst",
-  prompt: "Mechanical analysis pass 1 — inventory. Read all .pq files in '2 - Source Files/m_queries/'. Read manifest at '2 - Source Files/query_inventory.csv'. For each query: classify role (output_entity / staging / transformation / parameter_or_function / helper). Detect source type (sql_server, analysis_services, sharepoint, excel, csv, web, odata, azure_storage, linked_dataflow, static_table, json, derived). Build dependency map (Mermaid). Write JSON envelope to '1 - Documentation/m-analysis-inventory.json' with fields: queries[], dependencies[], output_entities[], helpers_to_skip[]. Do NOT make decisions about bronze/silver assignment yet — that's Stage 5.",
+  prompt: "Mechanical analysis pass 1 — inventory. Read all .pq files in '2 - Source Files/m_queries/'. Read manifest at '2 - Source Files/query_inventory.csv'. For each query: classify role (output_entity / staging / transformation / parameter_or_function / helper). Detect source type (sql_server, analysis_services, sharepoint, excel, csv, web, odata, azure_storage, linked_dataflow, static_table, json, derived). Build dependency map (Mermaid). Write JSON envelope to '1 - Documentation/m-analysis-inventory.json' with fields: queries[], dependencies[], output_entities[], helpers_to_skip[]. Do NOT make decisions about bronze/silver assignment yet — that's Stage 6.",
   run_in_background: true,
   mode: "acceptEdits"
 )
@@ -336,14 +373,14 @@ Task(
 
 When complete, read the JSON envelope and write Section 2 + Section 4 of `migration-design.md`.
 
-### Stage 4 — Risk Scan (background)
+### Stage 5 — Risk Scan (background)
 
 Spawn `m-query-analyst` again for risk scan:
 
 ```
 Task(
   subagent_type: "fabric-dataflow-migration-toolkit:m-query-analyst:m-query-analyst",
-  prompt: "Mechanical analysis pass 2 — risk scan. For each .pq file in '2 - Source Files/m_queries/', scan for the 12 known risk patterns documented in '${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md'. For each match, record: risk ID (RISK-NN), file path, line number, severity (Low/Medium/High), recommended mitigation. Also flag any M function or pattern NOT in the catalog as 'unknown' — these need to be added to the conversion backlog. Write JSON envelope to '1 - Documentation/m-analysis-risks.json' with fields: known_risks[], unknown_patterns[]. After writing, append every entry in unknown_patterns[] to '_Documentation/conversion-backlog.md' as a new row.",
+  prompt: "Mechanical analysis pass 2 — risk scan. For each .pq file in '2 - Source Files/m_queries/', scan for the 12 known risk patterns documented in '6 - Agentic Resources/reference/m-conversion-risk-catalog.md'. For each match, record: risk ID (RISK-NN), file path, line number, severity (Low/Medium/High), recommended mitigation. Also flag any M function or pattern NOT in the catalog as 'unknown' — these need to be added to the conversion backlog. Write JSON envelope to '1 - Documentation/m-analysis-risks.json' with fields: known_risks[], unknown_patterns[]. After writing, append every entry in unknown_patterns[] to '_Documentation/conversion-backlog.md' as a new row.",
   run_in_background: true,
   mode: "acceptEdits"
 )
@@ -351,26 +388,74 @@ Task(
 
 When complete, read the JSON envelope and write Section 3 of `migration-design.md`.
 
-### Stage 5 — Refactor Decisions (User Touchpoint 2, MUST be foreground)
+### Stage 6 — Refactor Decisions (User Touchpoint 2, parent-owned AskUserQuestion)
 
-**CRITICAL: this stage MUST be foreground. The migration-analyst calls `AskUserQuestion`, and a background subagent has no user channel — its `AskUserQuestion` calls silently no-op and you would get back defaults the user never picked. If you find yourself considering `run_in_background: true` here because Stages 3 and 4 used it, STOP. Stages 3 and 4 are non-interactive mechanical analysis; Stage 5 is interactive Q&A. They are different stages with different requirements.**
+**CRITICAL: `AskUserQuestion` is NOT available in subagents — not background, not foreground.** The Claude Agent SDK docs ([user-input.md](https://code.claude.com/docs/en/agent-sdk/user-input.md)) state under Limitations: *"`AskUserQuestion` is not currently available in subagents spawned via the Agent tool."* Listing it in a subagent's `tools:` frontmatter has no effect — the call fails silently. This is documented finding N15.
 
-**Hard requirement:** the user MUST answer at least two questions at this stage (refactor strictness + naming are always asked by the analyst). If you reach Stage 6 without `AskUserQuestion` having fired, you have a bug — re-spawn the analyst correctly.
+**Therefore:** YOU (the orchestrator) own all `AskUserQuestion` calls for this stage. The `migration-analyst` subagent runs in TWO modes — `analyze` (determines applicable questions, returns JSON envelope) and `write` (consumes user's answers, writes design-doc Sections 1+5). Neither mode interacts with the user; both run safely in background.
 
-Spawn `migration-analyst` in foreground with an explicit `run_in_background: false`:
+The stage has three sub-steps: 6a (analyst returns questions), 6b (orchestrator asks them), 6c (analyst writes sections from answers).
+
+#### Sub-step 6a — Analyst returns applicable questions
+
+Spawn `migration-analyst` in background, `Mode: analyze`:
 
 ```
 Task(
   subagent_type: "fabric-dataflow-migration-toolkit:migration-analyst:migration-analyst",
-  prompt: "Read '1 - Documentation/m-analysis-inventory.json' and '1 - Documentation/m-analysis-risks.json'. Determine which refactor questions apply to this workspace's discovered patterns (only ask about Excel if Excel sources exist, only ask about Combine Files if helpers detected, only ask about AzureStorage if blob URIs found, only ask about API if web sources found). Ask 3-4 dynamic questions via AskUserQuestion. Write Sections 1 (Migration Goals) and 5 (Refactor Decisions) of '1 - Documentation/migration-design.md'.",
-  run_in_background: false,
+  prompt: "Mode: analyze. Read '1 - Documentation/m-analysis-inventory.json' and '1 - Documentation/m-analysis-risks.json'. Determine which refactor questions apply based on detected patterns (Excel question only if Excel sources detected, Combine Files only if helpers detected, AzureStorage only if blob sources detected, API only if web/odata sources detected). Read ${CLAUDE_PLUGIN_OPTION_report_unknown_patterns} env var for Q7 inclusion logic. Cap at 4 questions max. Write JSON envelope to '1 - Documentation/refactor-questions.json' with applicable_questions[] array. Do NOT call AskUserQuestion — that tool is not available in subagents. Do NOT write to migration-design.md yet.",
+  run_in_background: true,
   mode: "acceptEdits"
 )
 ```
 
-After it returns, verify the analyst actually asked questions: read `1 - Documentation/migration-design.md` Section 5 and confirm the values were chosen (not blank or all defaults). If Section 5 is missing or only contains default placeholder text, the analyst ran but `AskUserQuestion` did not fire — halt with an error rather than silently proceeding to Stage 6.
+When it returns, verify `1 - Documentation/refactor-questions.json` exists and parses as JSON with at least 2 entries in `applicable_questions[]` (Q1 refactor strictness and Q6 naming are always present). If missing or malformed, halt with an explicit error — Stage 6b cannot proceed without the questions array.
 
-After it returns, derive the Medallion Mapping (Section 6) yourself by combining the inventory with refactor decisions:
+#### Sub-step 6b — Orchestrator asks the user
+
+Read `1 - Documentation/refactor-questions.json`. Pass every entry into a single `AskUserQuestion` call. Each entry already has the correct `question` / `header` / `multiSelect` / `options` schema — pass them through:
+
+```
+AskUserQuestion(
+  questions: [
+    /* each entry from applicable_questions[] becomes one element here */
+    { question: "...", header: "...", multiSelect: false, options: [{label, description}, ...] },
+    ...
+  ]
+)
+```
+
+Collect the user's selections. Build the answers map by pairing each question's `key` from the envelope with the user's chosen `label`. Write the result to `1 - Documentation/refactor-answers.json`:
+
+```json
+{
+  "answers": {
+    "refactor_strictness": "Medallion split",
+    "combine_files": "Absorb (recommended)",
+    "naming_convention": "Accept defaults"
+    /* only keys for questions that were actually asked */
+  }
+}
+```
+
+Append the user's selections to Section 11 (Design Decisions Log) for traceability.
+
+#### Sub-step 6c — Analyst writes Sections 1 + 5
+
+Spawn `migration-analyst` again in background, `Mode: write`:
+
+```
+Task(
+  subagent_type: "fabric-dataflow-migration-toolkit:migration-analyst:migration-analyst",
+  prompt: "Mode: write. Read '1 - Documentation/m-analysis-inventory.json', '1 - Documentation/m-analysis-risks.json', and '1 - Documentation/refactor-answers.json'. Write Sections 1 (Migration Goals) and 5 (Refactor Decisions) of '1 - Documentation/migration-design.md' deterministically based on the answers. Do NOT touch other sections. Do NOT call AskUserQuestion.",
+  run_in_background: true,
+  mode: "acceptEdits"
+)
+```
+
+When it returns, verify Section 5 of `1 - Documentation/migration-design.md` contains the user's chosen values (not blanks or template placeholders). If Section 5 is missing or contains template text, halt — the write step failed.
+
+After 6c completes, derive the Medallion Mapping (Section 6) yourself by combining the inventory with refactor decisions:
 
 - `output_entity` queries → bronze (one notebook per query, naming per refactor decision)
 - `transformation` queries → silver
@@ -379,7 +464,7 @@ After it returns, derive the Medallion Mapping (Section 6) yourself by combining
 
 Write Sections 6, 7 (Bronze Build Plan), 8 (Silver Build Plan).
 
-### Stage 6 — Design Approval (User Touchpoint 3, AskUserQuestion)
+### Stage 7 — Design Approval (User Touchpoint 3, AskUserQuestion)
 
 **This orchestrator does not have the `EnterPlanMode` tool — do not attempt to enter native plan mode.** Use `AskUserQuestion` instead. Print the full migration outcome as a text block to the user FIRST so they have the context, then issue the approval prompt:
 
@@ -413,33 +498,19 @@ AskUserQuestion(
     header: "Approval",
     multiSelect: false,
     options: [
-      { label: "Approve and proceed", description: "Lock in the design, set Section 0 status to Approved, run Stages 7-13" },
-      { label: "Revise refactor decisions", description: "Re-enter Stage 5 to change refactor choices, then re-show this approval" },
+      { label: "Approve and proceed", description: "Lock in the design, set Section 0 status to Approved, run Stages 8-13" },
+      { label: "Revise refactor decisions", description: "Re-enter Stage 6 to change refactor choices, then re-show this approval" },
       { label: "Abort", description: "Stop here. Design doc is preserved for inspection; no notebooks will be generated." }
     ]
   }]
 )
 ```
 
-On `Approve and proceed`: set Section 0 status to `Approved` and proceed to Stage 7.
-On `Revise refactor decisions`: return to Stage 5 — re-spawn `migration-analyst` foreground; after it writes new decisions, re-render Sections 6/7/8 and re-show this approval.
-On `Abort`: write `Status: Aborted by user at Stage 6 approval` into Section 11 (Design Decisions Log), print a final message pointing at the design doc location, and stop. Do NOT proceed to Stage 7.
+On `Approve and proceed`: set Section 0 status to `Approved` and proceed to Stage 2.
+On `Revise refactor decisions`: return to Stage 6 — re-spawn `migration-analyst` foreground; after it writes new decisions, re-render Sections 6/7/8 and re-show this approval.
+On `Abort`: write `Status: Aborted by user at Stage 7 approval` into Section 11 (Design Decisions Log), print a final message pointing at the design doc location, and stop. Do NOT proceed to Stage 2.
 
 **Do not silently skip this approval.** If `AskUserQuestion` fails or you have no user channel (e.g. you were incorrectly spawned as a subagent), halt with an error message — never default to "Approve and proceed".
-
-### Stage 7 — Project Scaffolding (skip if incremental mode)
-
-Atomic call:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-project-initializer/scripts/initialize_fabric_project.py" --target . --name "<project>" --workspace "<workspace>" --bronze-lakehouse "<bronze>" --silver-lakehouse "<silver>" --gold-lakehouse "<gold>" --description "<desc>" --force
-```
-
-Verify by checking that `0 - Architecture Setup/project-config.yml`, `3 - Notebooks/bronze/`, etc. exist:
-
-```bash
-ls "0 - Architecture Setup/project-config.yml"
-```
 
 ### Stage 8 — Build Bronze Notebooks (parallel fan-out)
 
@@ -453,9 +524,9 @@ Task(
   Read these inputs:
   - Section 6 row in '1 - Documentation/migration-design.md' for this query
   - The .pq file at '2 - Source Files/m_queries/<dataflow>/<query>.pq'
-  - Risk catalog at '${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md'
-  - Notebook template at '${CLAUDE_PLUGIN_ROOT}/reference/notebook-template.md'
-  - PySpark style guide at '${CLAUDE_PLUGIN_ROOT}/reference/pyspark-style-guide.md'
+  - Risk catalog at '6 - Agentic Resources/reference/m-conversion-risk-catalog.md'
+  - Notebook template at '6 - Agentic Resources/reference/notebook-template.md'
+  - PySpark style guide at '6 - Agentic Resources/reference/pyspark-style-guide.md'
 
   Convert the M code to PySpark using the m-to-pyspark-converter skill:
     python \"${CLAUDE_PLUGIN_ROOT}/skills/m-to-pyspark-converter/scripts/convert_m_to_pyspark.py\" --m-file \"2 - Source Files/m_queries/<dataflow>/<query>.pq\"

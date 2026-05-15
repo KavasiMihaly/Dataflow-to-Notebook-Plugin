@@ -52,7 +52,7 @@ The orchestrator will:
 
 - **Pre / Stage 0:** Skip preflight (sample mode); detect this is a fresh build
 - **Stage 1:** Skip config Q&A (sample mode auto-fills with placeholder workspace)
-- **Stage 2:** Copy bundled JSONs from `${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/` to `1 - Source Dataflows/`, parse to `.pq` files in `2 - Source Files/m_queries/`
+- **Stage 2:** Copy bundled JSONs from `${CLAUDE_PLUGIN_ROOT}/examples/sample-dataflows/` to `2 - Source Files/dataflow-json/`, parse to `.pq` files in `2 - Source Files/m_queries/`
 - **Stage 3:** `m-query-analyst` runs Pass 1 → produces `1 - Documentation/m-analysis-inventory.json`
 - **Stage 4:** `m-query-analyst` runs Pass 2 → produces `1 - Documentation/m-analysis-risks.json`
 - **Stage 5:** `migration-analyst` asks 3-4 questions (in dry-run mode, defaults are pre-selected — you'll see the questions but can accept defaults)

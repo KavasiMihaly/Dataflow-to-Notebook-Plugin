@@ -178,8 +178,7 @@ _ALLOWLIST: list[re.Pattern[str]] = [
     ),
 
     # --- Discovery / verification commands -------------------------------
-    re.compile(r'''^\s*ls\s+['"]?1 - Source Dataflows[/\\]?['"]?\s*$''', re.DOTALL),
-    re.compile(r'''^\s*ls\s+['"]?2 - Source Files[/\\]?['"]?\s*$''', re.DOTALL),
+    re.compile(r'''^\s*ls\s+['"]?2 - Source Files([/\\]dataflow-json)?[/\\]?['"]?\s*$''', re.DOTALL),
     re.compile(r'''^\s*ls\s+['"]?3 - Notebooks[/\\]?(bronze|silver|gold)?[/\\]?['"]?\s*$''', re.DOTALL),
 
     # --- find for .pq and .ipynb files -----------------------------------
@@ -191,7 +190,7 @@ _ALLOWLIST: list[re.Pattern[str]] = [
 
     # --- Bundled sample copy (Stage 2 in --sample mode) ------------------
     re.compile(
-        r'''^\s*cp\s+-r\s+['"]?[^'"]*[/\\]examples[/\\]sample-dataflows[/\\]\.['"]?\s+['"]?1 - Source Dataflows[/\\]?['"]?\s*$''',
+        r'''^\s*cp\s+-r\s+['"]?[^'"]*[/\\]examples[/\\]sample-dataflows[/\\]\.['"]?\s+['"]?2 - Source Files[/\\]dataflow-json[/\\]?['"]?\s*$''',
         re.DOTALL,
     ),
 ]

@@ -315,12 +315,12 @@ _Documentation/
 | 0 | Orchestrator | Detect fresh build vs. incremental |
 | 1a | Orchestrator | **(Interactive)** If user has no source workspace ID: generate `Discover-AllDataflows.ps1`, user runs it in PowerShell, picks a workspace from the resulting CSV |
 | 1b | Orchestrator | **(Interactive)** Workspace + lakehouse config |
-| 2 | `dataflow-gen1-extractor` | **(Interactive)** PowerShell export → .pq files |
-| 3 | `m-query-analyst` | Inventory + dependency map |
-| 4 | `m-query-analyst` | Risk catalog (12 patterns + unknowns) |
-| 5 | `migration-analyst` | **(Interactive)** Refactor + strategy decisions |
-| 6 | Orchestrator | **(Plan mode)** User approves medallion mapping |
-| 7 | `fabric-project-initializer` | Project scaffolding |
+| 2 | `fabric-project-initializer` | Project scaffolding + copy plugin reference materials into `6 - Agentic Resources/reference/` (skip if incremental mode) |
+| 3 | `dataflow-gen1-extractor` | **(Interactive)** PowerShell export → .pq files |
+| 4 | `m-query-analyst` | Inventory + dependency map |
+| 5 | `m-query-analyst` | Risk catalog (12 patterns + unknowns) |
+| 6 | `migration-analyst` | **(Interactive)** Refactor + strategy decisions |
+| 7 | Orchestrator | **(AskUserQuestion)** User approves medallion mapping |
 | 8 | `fabric-bronze-builder` (parallel) | Bronze `.ipynb` notebooks |
 | 9 | `fabric-silver-builder` (canary + parallel) | Silver `.ipynb` notebooks |
 | 10 | `fabric-notebook-deployer` | `fab import` (skip in dry-run) |
@@ -398,9 +398,28 @@ After editing agents/skills/hooks, run `/reload-plugins`.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Pre-1.0 versions are pre-stable — minor bumps may include behavioral changes.
 
-### [0.2.0] — 2026-05-15
+### [0.3.0] — 2026-05-15 (later)
 
-First version dogfooded end-to-end on a real corporate-network Windows machine. The changes below were either discovered the hard way during that test run or built proactively to keep future runs from hitting the same wall. Full root-cause analysis for each "silent failure" pattern is in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings N8–N13.
+Patch follow-up to 0.2.0. Released to address three bugs that 0.2.0 produced when run live against the user's corporate-network Windows machine. Full root-cause analysis in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings N14–N15.
+
+#### Changed
+- **Pipeline stage order — scaffolding moved from Stage 7 to Stage 2.** Previously the project initializer ran AFTER export/inventory/risk-scan, which meant Stages 3–6 wrote into folders that didn't formally exist yet. `cp` auto-created parent directories, and the orchestrator's Stage 2 export wrote to `1 - Source Dataflows/` while the initializer's `1 - Documentation/` collided at the same prefix. Reordered so scaffolding runs immediately after config Q&A. Old Stages 2–6 are now Stages 3–7; Stages 8–13 unchanged. Finding N14 secondary.
+- **Subagent prompts now read references from the project, not the plugin cache.** Stages 5 (risk scan) and 8/9 (builders) reference `6 - Agentic Resources/reference/m-conversion-risk-catalog.md` (project-local) instead of `${CLAUDE_PLUGIN_ROOT}/reference/m-conversion-risk-catalog.md` (plugin cache). Background subagents have restricted filesystem permissions and cannot read paths outside the working directory. The Stage 2 scaffolder copies all five plugin reference files into the project so every later subagent has access. Finding N14.
+- **Stage 6 (Refactor Decisions) restructured into three parent-owned sub-steps (6a/6b/6c).** `AskUserQuestion` is not available in any subagent, foreground or background, per the [Claude Agent SDK Limitations docs](https://code.claude.com/docs/en/agent-sdk/user-input.md). 0.2.0's "spawn foreground" approach was based on a wrong premise (N9 was partially wrong; superseded by N15). The orchestrator now (6a) spawns `migration-analyst` in `Mode: analyze` to return a JSON envelope of applicable questions, (6b) calls `AskUserQuestion` itself with that envelope, then (6c) spawns the analyst in `Mode: write` to consume the answers and write Sections 1+5 of migration-design.md. Both analyst spawns are background; neither needs `AskUserQuestion`. Finding N15.
+
+#### Fixed
+- **Duplicate `1 -` folder prefix.** Renamed `1 - Source Dataflows/` to `2 - Source Files/dataflow-json/`. Consolidates source artifacts (raw JSON, parsed `.pq` files, inventory CSV) under one numbered folder and eliminates the prefix collision with `1 - Documentation/`.
+- **N14 risk-scan permissions block.** Risk-scan subagent could not read the M-conversion risk catalog from the plugin cache; now reads from the project-local copy made during Stage 2 scaffolding.
+- **N15 Refactor Q&A silent default-fallback.** Before the Stage 6 refactor, the migration-analyst's `AskUserQuestion` calls silently no-op'd and the analyst wrote unconfirmed defaults to Sections 1+5. Refactor decisions now go through the orchestrator's user channel; the user's actual choices land in the design doc.
+
+#### Removed
+- **`AskUserQuestion` from migration-analyst's `tools:` frontmatter.** It was never functional there (subagents cannot use it) and its presence was misleading. The analyst is now a two-mode non-interactive specialist.
+
+### [0.2.0] — 2026-05-15 (released)
+
+First version dogfooded end-to-end on a real corporate-network Windows machine. The changes below were either discovered the hard way during a prior dry-run or built proactively to keep future runs from hitting the same wall. Full root-cause analysis for each "silent failure" pattern is in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings N8–N13.
+
+This version shipped to the marketplace and produced two live-discovered bugs that 0.3.0 addresses (see N14 above): a duplicate `1 -` folder prefix from out-of-order scaffolding, and a permissions block when background subagents tried to read reference files from the plugin cache. Plus a third issue surfaced during the same run that 0.3.0 documents but does not yet fix (N15: `AskUserQuestion` doesn't work in subagents at all).
 
 #### Added
 - **Stage 1a tenant-wide discovery** — orchestrator now offers a `Discover-AllDataflows.ps1` generation step when the user has no `source_workspace_id`. Lists every workspace × every Gen 1 dataflow accessible to the signed-in user (or every workspace in the tenant for admins via `-Scope Organization`). Output CSV → user picks → orchestrator proceeds to Stage 2.
