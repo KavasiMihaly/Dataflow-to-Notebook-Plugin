@@ -1,7 +1,7 @@
 # Pipeline Workflow — Process Map
 
 **Last updated:** 2026-05-02
-**Applies to:** `fabric-dataflow-migration-toolkit` plugin v0.1
+**Applies to:** `fabric-dataflow-migration-toolkit` plugin v0.x (pre-stable)
 
 This document is the authoritative narrative of the 13-stage migration pipeline. The orchestrator's `agent.md` is the implementation; this is the process map and contract reference for plugin contributors.
 

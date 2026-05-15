@@ -394,6 +394,46 @@ After editing agents/skills/hooks, run `/reload-plugins`.
 
 ---
 
+## Changelog
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Pre-1.0 versions are pre-stable — minor bumps may include behavioral changes.
+
+### [0.2.0] — 2026-05-15
+
+First version dogfooded end-to-end on a real corporate-network Windows machine. The changes below were either discovered the hard way during that test run or built proactively to keep future runs from hitting the same wall. Full root-cause analysis for each "silent failure" pattern is in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings N8–N13.
+
+#### Added
+- **Stage 1a tenant-wide discovery** — orchestrator now offers a `Discover-AllDataflows.ps1` generation step when the user has no `source_workspace_id`. Lists every workspace × every Gen 1 dataflow accessible to the signed-in user (or every workspace in the tenant for admins via `-Scope Organization`). Output CSV → user picks → orchestrator proceeds to Stage 2.
+- **`generate_discovery_script.py`** in the `dataflow-gen1-extractor` skill — companion to the existing `generate_export_script.py`.
+- **TLS-interception detection** in the `fabric-preflight-check` skill — probes `https://api.fabric.microsoft.com/` via Python's `ssl` module and emits a non-blocking warning if a corporate proxy/AV is re-signing connections with a root the Python `certifi` bundle doesn't trust.
+- **`examples/Setup-CorpCertBundle.ps1`** — one-command helper that augments Python's certifi bundle with the corporate root CAs already trusted by Windows, then sets `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` at user scope. Unblocks `az` CLI, `fab` CLI, and any `requests`-based tool under Norton / Zscaler / Palo Alto / similar.
+- **"Corporate environment setup" section** in README, plus expanded troubleshooting table with the specific symptom strings and fix commands.
+- **Trust-but-verify step** in orchestrator Stage 8/9 — `ls` confirms each builder's claimed `notebook_path` actually exists on disk before the conformance gate accepts the envelope. Catches silent worktree-style file losses going forward.
+
+#### Changed
+- **Orchestrator Stage 5 (refactor Q&A) now spawns `migration-analyst` with explicit `run_in_background: false`** — was relying on a code-style comment that the orchestrating model pattern-matched away, dropping the analyst into background mode where `AskUserQuestion` silently no-ops. Stage 5's design doc is now also verified post-spawn (halt if Section 5 still contains defaults). Finding N9.
+- **Orchestrator Stage 6 (design approval) swapped from native plan mode to `AskUserQuestion`** — the orchestrator's `tools:` list didn't include `EnterPlanMode`, so "Enter plan mode" was a silent no-op and the pipeline barreled past the approval gate. Now uses `AskUserQuestion` with `Approve / Revise / Abort` options. Finding N10.
+- **Bronze/silver builders no longer use `isolation: worktree`** — the worktree hooks ran `git worktree remove --force` after the agent finished, wiping every `.ipynb` the builder had just written. Builders now write directly to `3 - Notebooks/{bronze,silver}/`; each handles a unique query so no collisions. Finding N8.
+- **Discovery + export PowerShell scripts now generated as UTF-8 with BOM** — without a BOM, PS 5.1 falls back to Windows-1252 and misinterprets UTF-8 multi-byte characters (e.g. em-dashes) as multiple chars including a spurious right-double-quote that prematurely closes string literals, cascading into "missing terminator" parse errors. Templates also ASCII-ified for defense in depth. Finding N13.
+- **Both PowerShell scripts now strongly recommend Windows PowerShell 5.1 (`powershell -File ...`), not pwsh 7 (`pwsh -File ...`)** — PS 5.1's WebBrowser COM auth uses the Windows cert store (trusts corporate-proxy roots that Python doesn't), and an in-process dialog (doesn't depend on `Process.Start("https://...")` succeeding, which silently hangs in pwsh -File / VS Code terminal / remote sessions). Scripts now print a clear warning if they detect they're running under pwsh 7. Findings N12 + the auth-flow research.
+- **Orchestrator Pre-Stage now skips entirely in `--sample` mode** — sample dry-run runs against bundled JSON, generates notebooks locally, and never calls Fabric/Azure, so the preflight (which checks `fab` CLI + Azure auth) is irrelevant. Was previously halting `--sample --dry-run` runs if the user didn't have `fab` installed.
+- **Pre-flight envelope now includes a `warnings` array** alongside `checks`/`status`/`remediation`. Orchestrator Pre-Stage surfaces warnings with explicit "this won't block but you should know" framing, special-cases the `tls_interception` warning with the exact fix command.
+- **README + quickstart + pipeline-workflow now document `claude --agent ...` from a fresh shell as the only supported launch path** — see N11 below.
+
+#### Removed
+- **`/migrate-dataflows` slash command** and the entire `commands/` directory — slash commands run inside an existing Claude session, which would have spawned the orchestrator as a subagent. Claude Code's hierarchy rules prevent a subagent from spawning further subagents, so the orchestrator's own `Task(...)` calls to its 5 specialists silently no-op'd, stalling the pipeline. Orchestrator now must be launched as the main session: `claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:fabric-migration-orchestrator "..."` from a fresh shell. Finding N11.
+- **`hooks/create-worktree.py` and `hooks/remove-worktree.py`** — orphaned after dropping `isolation: worktree`. The `WorktreeCreate` / `WorktreeRemove` registrations in `plugin.json` removed too. Hook count: 5 → 3.
+- **`4 - Semantic Layer/`, `5 - Report Building/`, `7 - Data Exports/`** folders no longer pre-created by `fabric-project-initializer`. The first two were never populated by any plugin stage; the third is lazy-created by the lakehouse-reader skill on first live use. Scaffolded project now contains only the 5 folders the pipeline actually fills.
+
+#### Fixed
+- Aligned `homepage` and `repository` URLs in `plugin.json` with the actual GitHub repo name (`Dataflow-to-Notebook-Plugin`); marketplace.json entry corrected to match.
+
+### [0.1.0] — 2026-05-02
+
+Initial release. Structurally complete (six pre-shipment audit gates pass) but untested against a real workspace. See [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings F1–F9 (inherited from the companion dbt-pipeline-toolkit plugin) and N1–N7 (Fabric-specific design decisions).
+
+---
+
 ## Author
 
 **Mihaly Kavasi** — [@KavasiMihaly](https://github.com/KavasiMihaly) | [OneDayBI](https://www.onedaybi.com)
