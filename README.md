@@ -398,6 +398,13 @@ After editing agents/skills/hooks, run `/reload-plugins`.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Pre-1.0 versions are pre-stable — minor bumps may include behavioral changes.
 
+### [0.3.1] — 2026-05-17
+
+Patch follow-up to 0.3.0. Fixes a reference-copy bug that made the N14 fix ineffective on fresh builds. Full root-cause analysis in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) finding N16.
+
+#### Fixed
+- **N16 — `fabric-project-initializer` copied only stub reference files on fresh builds.** The scaffolder resolved the bundled reference folder as `<root>/Agents/reference/fabric` whenever `CLAUDE_PLUGIN_ROOT` was not exported into the script's environment. That path does not exist (the real materials ship at `<root>/reference/`), so the "graceful" branch wrote two placeholder files and skipped `m-conversion-risk-catalog.md` — making the orchestrator's Stage 2 reference check (introduced by the N14 fix) fail out of the box. Replaced the env-var-dependent `if/else` with a resolver that searches `$CLAUDE_PLUGIN_ROOT/reference` and every script ancestor's `reference/`, selecting the first directory that contains the catalog sentinel so a partial set is never chosen. The not-found branch is now a loud, actionable error instead of misleading stubs.
+
 ### [0.3.0] — 2026-05-15 (later)
 
 Patch follow-up to 0.2.0. Released to address three bugs that 0.2.0 produced when run live against the user's corporate-network Windows machine. Full root-cause analysis in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) findings N14–N15.
