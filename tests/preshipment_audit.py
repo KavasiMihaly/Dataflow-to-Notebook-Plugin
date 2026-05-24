@@ -8,6 +8,7 @@ Runs the §8.1 quality gates from the plan:
   3. Namespace audit — every cross-agent reference uses 3-part name
   4. Skills frontmatter audit — every agent's `skills:` uses 2-part namespace
   5. Plugin manifest validation — plugin.json parses, hook scripts exist, userConfig keys complete
+  6. Notebook-extension audit — no `.py` prescriptions in agent bodies for `3 - Notebooks/` outputs (N16)
 
 Exit code 0 if all gates pass, 1 if any gate fails.
 
@@ -266,6 +267,40 @@ def gate_required_files(findings: list[dict]) -> bool:
     return not failed
 
 
+def gate_notebook_extension(findings: list[dict]) -> bool:
+    """Reject agent bodies that prescribe `.py` notebook outputs in `3 - Notebooks/`.
+
+    Mirrors the runtime `validate-fabric-structure.py` PreToolUse hook at audit time
+    so agent.md and hook can't drift out of sync. See N16 in plugin_learnings.md.
+
+    Fabric's notebook deploy API treats `.py` as a single mega-cell — notebooks must
+    be `.ipynb` (Jupyter JSON). Catches both naming-convention prose
+    (`nb_bronze_x.py`) and bare path references (`3 - Notebooks/bronze/foo.py`).
+    """
+    agent_files = list((ROOT / "agents").rglob("agent.md"))
+    # Match anything ending in `.py` that's qualified by a `3 - Notebooks` path
+    # OR an `nb_(bronze|silver)_...py` notebook-naming pattern.
+    bad_pat = re.compile(
+        r"(?:3\s*-\s*Notebooks/[^\s`'\"]*\.py\b"
+        r"|nb_(?:bronze|silver)_[\w{}-]+\.py\b)"
+    )
+    failed = False
+    for f in agent_files:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for line_num, line in enumerate(text.splitlines(), start=1):
+            for m in bad_pat.finditer(line):
+                findings.append({
+                    "gate": "notebook_extension",
+                    "file": str(f.relative_to(ROOT)),
+                    "issue": f"Line {line_num}: prescribes `.py` notebook output ('{m.group(0)}') — must be `.ipynb` (see N16, N1)",
+                })
+                failed = True
+    return not failed
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pre-shipment audit for the plugin.")
     parser.add_argument("--json", action="store_true", help="Emit JSON envelope")
@@ -278,6 +313,7 @@ def main():
         ("namespace", gate_namespace),
         ("skills_frontmatter", gate_skills_frontmatter),
         ("atomic_bash", gate_atomic_bash),
+        ("notebook_extension", gate_notebook_extension),
     ]
 
     findings: list[dict] = []

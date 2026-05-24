@@ -118,10 +118,10 @@ This is the single source of truth. **Only you write to it** (except `migration-
 | .pq query | Layer | Notebook Name | Source Strategy | Risk Notes |
 
 ## 7. Bronze Build Plan
-{written by orchestrator — Stage 6; rows updated by fabric-bronze-builder Stage 8}
+{written by orchestrator — Stage 6; rows updated by orchestrator from fabric-bronze-builder JSON envelopes — Stage 8 (builders never write to this doc directly)}
 
 ## 8. Silver Build Plan
-{written by orchestrator — Stage 6; rows updated by fabric-silver-builder Stage 9}
+{written by orchestrator — Stage 6; rows updated by orchestrator from fabric-silver-builder JSON envelopes — Stage 9 (builders never write to this doc directly)}
 
 ## 9. Created Notebooks Registry
 {written by orchestrator after every successful build}
@@ -535,7 +535,7 @@ Task(
 
   Write '3 - Notebooks/bronze/nb_bronze_<query_snake>.ipynb' as a valid Jupyter JSON with synapse_pyspark kernel and lh_bronze lakehouse binding.
 
-  Return JSON envelope: { status: 'success'|'failed', notebook_path, conforms_to_plan: bool, deviations: [], warnings: [], errors: [], risks_isolated: [risk_ids] }",
+  Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status: 'success'|'failed', notebook_path, conforms_to_plan: bool, deviations: [], warnings: [], errors: [], risks_isolated: [risk_ids] }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,
   mode: "acceptEdits"
 )
@@ -567,7 +567,7 @@ Task(
 
   Write '3 - Notebooks/silver/nb_silver_<query_snake>.ipynb' as valid Jupyter JSON with lh_silver lakehouse binding.
 
-  Return JSON envelope: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }",
+  Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,
   mode: "acceptEdits"
 )

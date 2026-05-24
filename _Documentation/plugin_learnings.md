@@ -80,6 +80,8 @@ Microsoft Fabric's notebook deploy API treats `.py` files as a single mega-cell.
 
 The `validate-fabric-structure.py` PreToolUse hook blocks any Write/Edit of `.py` files in `3 - Notebooks/` with a clear remediation message. The `fabric-bronze-builder` and `fabric-silver-builder` agent bodies both explicitly require `.ipynb` output.
 
+> ⚠️ **N16 correction (2026-05-24):** The bronze-builder portion of the claim above was aspirational until the 2026-05-24 fix — the silver-builder body did require `.ipynb`, but the bronze-builder body still prescribed `.py` everywhere (lines 82, 187, 252 etc.). The hook caught most slips but one bronze builder produced both `.py` and `.ipynb` in a live run. See N16 for the full fix list and the new `gate_notebook_extension` audit gate that prevents this drift from recurring.
+
 ### N2 — Silver `read_bronze()`-only contract is enforceable at the hook layer
 
 The plugin's Stage 9 silver builder is strictly contracted: silver notebooks may only read via `read_bronze()`. External reads (`spark.read.csv`, `pd.read_csv`, `abfss://`, `Files/`) are bronze's job.
@@ -287,6 +289,72 @@ This is the same shape as the SDK's documented graceful-degradation behavior —
 - **N10's plan-mode parallel.** N10 noted plan-mode silently no-ops when `EnterPlanMode` isn't in the orchestrator's tools. The same class as N15: an interactive tool unavailable in a context where the code assumed it would be. Both findings now resolve to the same parent-side pattern — parent owns the interaction, subagent prepares/consumes structured data.
 
 **Discovered:** 2026-05-15 during live-test run. Validated via claude-code-guide agent fetching the SDK Limitations docs directly.
+
+---
+
+### N16 — `fabric-bronze-builder/agent.md` body still prescribes `.py` and dumps docs to `1 - Documentation/`, contradicting N1 + the orchestrator's design-doc ownership model
+
+**Symptom (live run, 2026-05-24, real workspace migration of 7 Gen1 dataflows → 14 bronze + 5 silver notebooks):** After Stage 8 fan-out of 14 `fabric-bronze-builder` agents, the orchestrator found these stray files outside the requested notebook paths:
+
+| Extra file pollution | Count | Origin |
+|---|---|---|
+| `.py` duplicate next to `.ipynb` (e.g. `nb_bronze_item_types.py`) | 1 of 14 | agent.md naming convention says `.py` |
+| Builder reports in `1 - Documentation/bronze-*.md` | 3 | agent.md line 326 says "Save documentation to `1 - Documentation/`" |
+| Loose JSON envelopes (`*_conversion_report.json`, `*_build_envelope.json`) on disk including repo root | 3 | orchestrator prompt said "Return JSON envelope" — ambiguous |
+| `NOTEBOOK_BUILD_REPORT_*.md` next to notebook | 1 | builder generalized agent.md's "Phase 6: Report" chat-summary template into a markdown file |
+| Invented `9 - Build Outputs/` and `7 - Data Exports/` directories | 2 | pure hallucination — not in scaffold, not in agent.md, not in orchestrator prompt |
+
+10 stray files / 2 stray directories across 14 builders. Notebooks themselves all generated correctly (5.9–15.3KB, all valid Jupyter JSON, all `.ipynb` as the orchestrator demanded).
+
+**Root cause — agent.md drift in three specific places:**
+
+1. **`agents/fabric-bronze-builder/agent.md` line 4-5 description** still reads "Handle CSV, Parquet, JSON, and API sources" — i.e. the agent was originally designed for a standalone CSV/Parquet/API world, NOT for `.ipynb` notebooks derived from M-query conversions.
+
+2. **agent.md lines 82, 187 — naming convention** still says `nb_bronze_{source_name}.py` and "Generate the PySpark notebook as a `.py` file in `3 - Notebooks/bronze/`". This **directly contradicts N1**, which claimed both the bronze and silver agent bodies "explicitly require `.ipynb` output." N1's claim was aspirational, not actual — the hook (`validate-fabric-structure.py`) blocks `.py` writes, but the agent.md body still prescribes them. The hook saves the user (most `.py` writes will be rejected, forcing the builder to retry as `.ipynb`), but one builder slipped through and produced both.
+
+3. **agent.md line 326 — Documentation section** says: *"Save any project-level documentation or data profiling observations to `1 - Documentation/` folder."* This was correct for the standalone CSV world (where bronze-builder was the only agent producing documentation), but in the M-migration workflow `1 - Documentation/` is owned by the orchestrator's master design doc (`migration-design.md`) plus the m-query-analyst's envelopes (`m-analysis-*.json`, `refactor-*.json`). Builders dumping their own notes there pollutes the orchestrator's namespace.
+
+**Root cause — orchestrator prompt ambiguity:**
+
+The orchestrator's Stage 8 builder prompts end with: `"Return JSON envelope: { status, notebook_path, ... }"`. Some builders (Haiku 4.5 in this run) interpret "Return" as "Write to a file"; others interpret it as "include in your chat response, which is how the parent reads it." Both are linguistically valid. The orchestrator parses the envelope from the chat response, so the file is redundant.
+
+**Fixes (must land together to fully close the gap):**
+
+1. **Update `agents/fabric-bronze-builder/agent.md`:**
+   - Line 4-5 description: replace "CSV, Parquet, JSON, and API sources" with "OData, Excel via SharePoint, CSV, Parquet, JSON, and API sources — output is always `.ipynb` (Jupyter JSON) for Fabric deployment, never `.py`".
+   - Line 82 naming convention: change `nb_bronze_{source_name}.py` → `nb_bronze_{source_name}.ipynb`.
+   - Line 187: replace "Generate the PySpark notebook as a `.py` file in `3 - Notebooks/bronze/`" with "Generate the notebook as a `.ipynb` Jupyter JSON file in `3 - Notebooks/bronze/` — Fabric's notebook deploy API treats `.py` as a single mega-cell (see N1)".
+   - Lines 105-167 templates: keep the Python code blocks (they remain accurate for the cell contents) but add a header note that they represent individual `.ipynb` cells, not a single `.py` file.
+   - Line 326 Documentation section: replace with: *"Do NOT write to `1 - Documentation/` — that folder is owned by the orchestrator's master design document (`migration-design.md`) and the m-query-analyst's JSON envelopes. Builder-specific notes belong in the notebook header markdown cell (cell 0), not as separate files. Do NOT create build report files; the orchestrator parses your chat-response JSON envelope."*
+   - Lines 332-343 Completion Summary: keep the template but add: *"This summary is for your chat response, NOT a file. The orchestrator parses it from the response."*
+
+2. **Same audit pass on `agents/fabric-silver-builder/agent.md`** — N1 claimed both agent bodies say `.ipynb` but bronze's didn't. **Audited 2026-05-24 during this same run: silver-builder is CLEAN.** It has explicit `.ipynb` instructions at lines 126, 149, 394 and explicitly forbids `.py`. Its `1 - Documentation/` references (lines 71, 75, 324) are read-only references to the `data-profiles/` subfolder, not write targets. So N1's claim was correct for silver, incorrect for bronze. Fix is bronze-only.
+
+3. **Orchestrator prompt tightening (already applied in this run's project memory but not yet pushed back into orchestrator agent.md):** Replace `"Return JSON envelope: { ... }"` with the unambiguous:
+
+   > Include this JSON envelope as the LAST block of your chat response — formatted as a fenced ```json``` block. DO NOT write the envelope to a file; the orchestrator parses it from your response. DO NOT create any files outside the single notebook path specified above.
+
+4. **Pre-shipment audit gate addition:** add a gate that greps every `agents/*/agent.md` body for `.py` mentions inside `3 - Notebooks/` paths. Should fail if found. Mirrors the existing `validate-fabric-structure.py` hook at audit time so agent.md and hook can't drift out of sync.
+
+5. **Post-Stage-8 cleanup is a workaround, not a fix.** The orchestrator currently cleans up stray files after each fan-out stage (Stage 8 in this run, Stage 9 silver and Stage 12 validator likely too). That's reactive scaffolding. The proper fix is items 1-4 above, which prevent the pollution at the source.
+
+**Companion correction to N1:** N1's claim that "the `fabric-bronze-builder` and `fabric-silver-builder` agent bodies both explicitly require `.ipynb` output" was wrong for bronze (verified by grep on this branch). Either:
+- N1 was aspirational at the time of writing and the edit was forgotten, OR
+- N1 was written referencing a different version of the agent body and the file regressed.
+
+Either way, the hook (`validate-fabric-structure.py`) compensates partially but doesn't catch the docs-in-`1 - Documentation/` issue or the JSON-envelope-on-disk issue. Items 1-5 above are needed.
+
+**Discovered:** 2026-05-24 during live-test run on real 7-dataflow / 21-query workspace (Sales & Marketing Data). 14 bronze builders fanned out in parallel; 10 stray files + 2 stray directories produced; orchestrator caught and removed them in Stage 8 cleanup pass. Project memory entry at `<repo>/.claude/agent-memory/fabric-dataflow-migration-toolkit-fabric-migration-orchestrator-fabric-migration-orchestrator/feedback_bronze_builder_extras.md` captures the cleanup pattern for the orchestrator to reapply automatically; this finding captures the upstream fix needed in the plugin itself.
+
+**Fixes landed 2026-05-24:**
+
+1. **`agents/fabric-bronze-builder/agent.md`** — description (lines 3-9), naming convention (lines 82-83), notebook-template preamble (lines 104-106), Phase 3 generation instruction (line 190), Phase 6 report (line 255), Documentation section (lines 327-335), Completion Summary (lines 339-355) — all rewritten to prescribe `.ipynb`, forbid writes to `1 - Documentation/`, forbid build-report files, forbid invented top-level directories.
+2. **`agents/fabric-migration-orchestrator/agent.md`** — Stage 8 builder prompt (line 538) and Stage 9 builder prompt (line 570) rewritten from ambiguous "Return JSON envelope" to explicit "Include as LAST fenced ```json``` block in chat response, DO NOT write the envelope (or any other report/notes file) to disk, DO NOT create any files outside notebook_path, DO NOT write to `1 - Documentation/`, DO NOT invent new top-level directories."
+3. **`agents/fabric-migration-orchestrator/agent.md`** — Section 7 + 8 ownership phrasing (lines 121, 124) clarified from "rows updated by fabric-bronze-builder/silver-builder Stage 8/9" to "rows updated by orchestrator from fabric-bronze-builder/silver-builder JSON envelopes — Stage 8/9 (builders never write to this doc directly)". Removes a trap that misled at least one reader into thinking builders wrote to the design doc.
+4. **`tests/preshipment_audit.py`** — new `gate_notebook_extension` gate added (7th gate, alongside existing 6). Walks every `agents/*/agent.md` and fails if any line prescribes a `.py` notebook output under `3 - Notebooks/` or matches the `nb_(bronze|silver)_*.py` naming pattern. Mirrors the runtime `validate-fabric-structure.py` hook at audit time so agent.md drift can't ship again.
+5. **Audit re-run 2026-05-24** — all 7 gates PASS including the new `notebook_extension` gate.
+
+**Companion correction to N1 (above):** the line-number references in N1 were aspirational, not factual, at the time of writing — bronze-builder agent.md still prescribed `.py` until this fix. N1's stated rule ("both builder bodies explicitly require `.ipynb` output") is now actually true for both bronze and silver agent bodies as of 2026-05-24.
 
 ---
 

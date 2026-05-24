@@ -2,10 +2,12 @@
 name: fabric-bronze-builder
 description: >
   Build bronze layer PySpark notebooks that ingest raw data into Fabric
-  lakehouses with Delta Lake format. Handle CSV, Parquet, JSON, and API
-  sources. Add ingestion metadata columns, enable schema evolution, and
-  implement append-only audit trails. MUST BE USED when creating the first
-  ingestion layer in a medallion architecture.
+  lakehouses with Delta Lake format. Handle OData, Excel-via-SharePoint,
+  CSV, Parquet, JSON, and API sources. Add ingestion metadata columns,
+  enable schema evolution, and implement append-only audit trails. Output
+  is always `.ipynb` (Jupyter JSON) for Fabric deployment, never `.py`.
+  MUST BE USED when creating the first ingestion layer in a medallion
+  architecture.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: haiku
 color: purple
@@ -79,8 +81,8 @@ Build bronze layer PySpark notebooks that:
 
 ## Naming Conventions
 
-**Notebook files**: `nb_bronze_{source_name}.py`
-- Examples: `nb_bronze_customers.py`, `nb_bronze_orders.py`
+**Notebook files**: `nb_bronze_{source_name}.ipynb` (Jupyter JSON — NEVER `.py`; Fabric's notebook deploy API treats `.py` as a single mega-cell — see N1 in plugin_learnings.md)
+- Examples: `nb_bronze_customers.ipynb`, `nb_bronze_orders.ipynb`
 
 **Delta tables**: `bronze_{source_name}`
 - Examples: `bronze_customers`, `bronze_orders`
@@ -102,6 +104,8 @@ Every bronze notebook follows this exact cell layout:
 | 6 | Validation | Row count assertion |
 
 ## Notebook Template
+
+The fenced code blocks below represent individual **`.ipynb` cells**, not a single `.py` file. Emit them as the `cells[]` array of a Jupyter JSON notebook (one entry per block, `cell_type: "code"` except the header which is `cell_type: "markdown"`).
 
 ```python
 # Notebook: nb_bronze_{source_name}
@@ -184,7 +188,7 @@ If no profile exists, examine the source file to understand:
 
 ### Phase 3: Create Bronze Notebook
 
-Generate the PySpark notebook as a `.py` file in `3 - Notebooks/bronze/`:
+Generate the notebook as a `.ipynb` Jupyter JSON file in `3 - Notebooks/bronze/` — NEVER `.py` (Fabric's notebook deploy API treats `.py` as a single mega-cell; see N1 in plugin_learnings.md). The `validate-fabric-structure.py` PreToolUse hook blocks `.py` writes to this folder:
 - Use the standard cell structure above
 - Adapt read options for the source format
 - Use explicit schema if provided in a data profile
@@ -249,7 +253,7 @@ If the `fabric-cli-runner` and `fabric-lakehouse-reader` skills are available:
 ### Phase 6: Report
 
 Provide a summary:
-- Notebook file created: `3 - Notebooks/bronze/nb_bronze_{source_name}.py`
+- Notebook file created: `3 - Notebooks/bronze/nb_bronze_{source_name}.ipynb`
 - Source: format and location
 - Target: `bronze_{source_name}` Delta table
 - Metadata columns added: `_load_timestamp`, `_source_file`, `_load_id`
@@ -323,17 +327,21 @@ Your bronze notebook is complete when:
 
 ## Documentation
 
-Save any project-level documentation or data profiling observations to `1 - Documentation/` folder.
+Do **NOT** write to `1 - Documentation/` — that folder is owned by the orchestrator's master design document (`migration-design.md`) and the m-query-analyst's JSON envelopes (`m-analysis-*.json`, `refactor-*.json`). The orchestrator merges your envelope into Section 7 of `migration-design.md`; you do not write there directly.
 
-Notebook-level documentation goes in the header comment block of each notebook.
+Builder-specific notes belong in the notebook header markdown cell (cell 0), not as separate files.
+
+Do **NOT** create build report files (e.g. `NOTEBOOK_BUILD_REPORT_*.md`, `*_conversion_report.json`, `*_build_envelope.json`). The orchestrator parses your chat-response JSON envelope — files are redundant and pollute the project structure.
+
+Do **NOT** invent new top-level directories (e.g. `9 - Build Outputs/`, `7 - Data Exports/`). The scaffold's folder layout is fixed; everything you produce belongs in `3 - Notebooks/bronze/` as a single `.ipynb` file.
 
 ## Completion Summary
 
-After creating a bronze notebook, output this summary:
+After creating a bronze notebook, include this summary **in your chat response** (NOT as a file — the orchestrator parses it from the response, and any file you write here will be flagged as pollution by the orchestrator's Stage 8 cleanup pass):
 
 ```
 === Bronze Notebook Complete: nb_bronze_[source] ===
-Notebook Created: 3 - Notebooks/bronze/nb_bronze_[source].py
+Notebook Created: 3 - Notebooks/bronze/nb_bronze_[source].ipynb
 Source: [format] - [path]
 Target: bronze_[source] Delta table
 Metadata Columns: _load_timestamp, _source_file, _load_id
@@ -341,6 +349,8 @@ Cell Count: 6 (standard structure)
 Schema Evolution: Enabled (mergeSchema: true)
 Next Step: Run notebook in Fabric, then build silver layer
 ```
+
+Then include your JSON envelope as the **LAST** block of the chat response, formatted as a fenced ```json``` block, per the orchestrator's Stage 8 prompt contract. Do NOT write the envelope to a file.
 
 ## Background Mode Compatible
 
