@@ -80,7 +80,7 @@ Microsoft Fabric's notebook deploy API treats `.py` files as a single mega-cell.
 
 The `validate-fabric-structure.py` PreToolUse hook blocks any Write/Edit of `.py` files in `3 - Notebooks/` with a clear remediation message. The `fabric-bronze-builder` and `fabric-silver-builder` agent bodies both explicitly require `.ipynb` output.
 
-> ⚠️ **N16 correction (2026-05-24):** The bronze-builder portion of the claim above was aspirational until the 2026-05-24 fix — the silver-builder body did require `.ipynb`, but the bronze-builder body still prescribed `.py` everywhere (lines 82, 187, 252 etc.). The hook caught most slips but one bronze builder produced both `.py` and `.ipynb` in a live run. See N16 for the full fix list and the new `gate_notebook_extension` audit gate that prevents this drift from recurring.
+> ⚠️ **N17 correction (2026-05-24):** The bronze-builder portion of the claim above was aspirational until the 2026-05-24 fix — the silver-builder body did require `.ipynb`, but the bronze-builder body still prescribed `.py` everywhere (lines 82, 187, 252 etc.). The hook caught most slips but one bronze builder produced both `.py` and `.ipynb` in a live run. See N17 for the full fix list and the new `gate_notebook_extension` audit gate that prevents this drift from recurring.
 
 ### N2 — Silver `read_bronze()`-only contract is enforceable at the hook layer
 
@@ -304,7 +304,9 @@ This is the same shape as the SDK's documented graceful-degradation behavior —
 
 ---
 
-### N16 — `fabric-bronze-builder/agent.md` body still prescribes `.py` and dumps docs to `1 - Documentation/`, contradicting N1 + the orchestrator's design-doc ownership model
+### N17 — `fabric-bronze-builder/agent.md` body still prescribes `.py` and dumps docs to `1 - Documentation/`, contradicting N1 + the orchestrator's design-doc ownership model
+
+> Renumbered from N16 → N17 in v0.4.0 (2026-05-24) to disambiguate from the earlier N16 above (scaffolder reference-folder resolution bug, shipped in v0.3.1). Two unrelated findings briefly shared the N16 label; this one was the newer of the two.
 
 **Symptom (live run, 2026-05-24, real workspace migration of 7 Gen1 dataflows → 14 bronze + 5 silver notebooks):** After Stage 8 fan-out of 14 `fabric-bronze-builder` agents, the orchestrator found these stray files outside the requested notebook paths:
 

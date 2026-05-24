@@ -398,6 +398,23 @@ After editing agents/skills/hooks, run `/reload-plugins`.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Pre-1.0 versions are pre-stable — minor bumps may include behavioral changes.
 
+### [0.4.0] — 2026-05-24
+
+Minor bump (behavioral change to agent contracts). Eliminates the stray-file pollution observed on the 2026-05-24 live run of a real 7-dataflow / 21-query workspace, where 14 parallel bronze builders produced 10 stray files + 2 invented top-level directories alongside the expected `.ipynb` outputs. The notebooks themselves were always correct; the pollution came from `agents/fabric-bronze-builder/agent.md` having drifted out of sync with the planned envelope-only design — and from the orchestrator's Stage 8/9 prompts saying "Return JSON envelope" ambiguously enough that one of two valid readings ("write to a file") landed.
+
+Full root-cause analysis in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) finding N17 ("bronze-builder agent.md drift") — see also the renumbering note at the end of this entry.
+
+#### Changed
+- **`agents/fabric-bronze-builder/agent.md` rewritten end-to-end to prescribe `.ipynb` and forbid stray file writes.** Description (now lists OData / Excel-via-SharePoint sources and states "output is always `.ipynb`, never `.py`"), naming convention (`nb_bronze_<name>.ipynb` everywhere it used to say `.py`), notebook-template preamble (explicit note that the fenced code blocks represent individual `.ipynb` cells, not a single `.py` file), Phase 3 generation instruction (`.ipynb` Jupyter JSON file, with cross-reference to N1), Phase 6 report, Documentation section (explicit prohibition on writes to `1 - Documentation/` and on build-report files), and Completion Summary (explicit "this is a chat-response artefact, NOT a file"). The N1 claim that "both builder bodies require `.ipynb`" was aspirational for bronze until now; it is factual as of this version.
+- **Orchestrator Stage 8 + Stage 9 builder prompts tightened.** Replaced ambiguous "Return JSON envelope: { ... }" with explicit "Include this JSON envelope as the **LAST** block of your chat response, formatted as a fenced ```json``` block. DO NOT write the envelope (or any other report/notes file) to disk. DO NOT create any files outside the single `notebook_path`. DO NOT write to `1 - Documentation/` (orchestrator-owned). DO NOT invent new top-level directories." Same rewrite for both stages; silver's extra envelope keys (`bronze_sources_used`, `read_bronze_only`) preserved.
+- **Orchestrator Section 7 + 8 ownership lines clarified.** Lines 121 + 124 of the orchestrator's master design-doc section table previously read "rows updated by fabric-bronze-builder/silver-builder Stage 8/9", which on its own reads as if the builders write to the design doc directly. Reworded to "rows updated by orchestrator from fabric-bronze-builder/silver-builder JSON envelopes — Stage 8/9 (builders never write to this doc directly)". The behavior was always envelope-flow (see line 85 of the same file); only the phrasing changed.
+
+#### Added
+- **`gate_notebook_extension` (7th pre-shipment audit gate).** Walks every `agents/*/agent.md` and fails if any line prescribes a `.py` notebook output under `3 - Notebooks/` or matches the `nb_(bronze|silver)_*.py` naming pattern. Mirrors the runtime `validate-fabric-structure.py` PreToolUse hook at audit time so agent-body prose and runtime enforcement cannot drift apart again. All seven gates green on this build.
+
+#### Notes
+- **Finding renumbered: §N16 → §N17 in plugin_learnings.md.** The bronze-builder agent.md drift fix landed in plugin_learnings.md initially under §N16, which clashed with the existing §N16 (scaffolder reference-folder resolution bug, shipped in 0.3.1). Both findings were present in the doc with the same label. Renumbered the newer one (this fix) to §N17 and added a one-line provenance banner on the renumbered heading. The [0.3.1] changelog entry below correctly references §N16 (scaffolder); this entry references §N17 (bronze-builder drift). The audit script's docstring + gate comments updated to match.
+
 ### [0.3.1] — 2026-05-17
 
 Patch follow-up to 0.3.0. Fixes a reference-copy bug that made the N14 fix ineffective on fresh builds. Full root-cause analysis in [`_Documentation/plugin_learnings.md`](_Documentation/plugin_learnings.md) finding N16.

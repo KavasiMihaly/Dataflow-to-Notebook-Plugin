@@ -8,7 +8,7 @@ Runs the §8.1 quality gates from the plan:
   3. Namespace audit — every cross-agent reference uses 3-part name
   4. Skills frontmatter audit — every agent's `skills:` uses 2-part namespace
   5. Plugin manifest validation — plugin.json parses, hook scripts exist, userConfig keys complete
-  6. Notebook-extension audit — no `.py` prescriptions in agent bodies for `3 - Notebooks/` outputs (N16)
+  6. Notebook-extension audit — no `.py` prescriptions in agent bodies for `3 - Notebooks/` outputs (N17)
 
 Exit code 0 if all gates pass, 1 if any gate fails.
 
@@ -271,7 +271,7 @@ def gate_notebook_extension(findings: list[dict]) -> bool:
     """Reject agent bodies that prescribe `.py` notebook outputs in `3 - Notebooks/`.
 
     Mirrors the runtime `validate-fabric-structure.py` PreToolUse hook at audit time
-    so agent.md and hook can't drift out of sync. See N16 in plugin_learnings.md.
+    so agent.md and hook can't drift out of sync. See N17 in plugin_learnings.md.
 
     Fabric's notebook deploy API treats `.py` as a single mega-cell — notebooks must
     be `.ipynb` (Jupyter JSON). Catches both naming-convention prose
@@ -295,7 +295,7 @@ def gate_notebook_extension(findings: list[dict]) -> bool:
                 findings.append({
                     "gate": "notebook_extension",
                     "file": str(f.relative_to(ROOT)),
-                    "issue": f"Line {line_num}: prescribes `.py` notebook output ('{m.group(0)}') — must be `.ipynb` (see N16, N1)",
+                    "issue": f"Line {line_num}: prescribes `.py` notebook output ('{m.group(0)}') — must be `.ipynb` (see N17, N1)",
                 })
                 failed = True
     return not failed
