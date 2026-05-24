@@ -78,12 +78,12 @@ ProjectName/
 │   │   └── nb_utils_config.py      # Configuration utility template
 │   └── orchestration/              # Pipeline orchestration notebooks
 ├── 6 - Agentic Resources/
-│   └── reference/                  # Copied Fabric reference materials
+│   └── reference/                  # Copied Fabric reference materials (all 5)
 │       ├── pyspark-style-guide.md
 │       ├── notebook-template.md
 │       ├── delta-lake-patterns.md
 │       ├── fabric-testing-patterns.md
-│       └── examples/
+│       └── m-conversion-risk-catalog.md   # Stage 2 check requires this file
 ├── .gitignore                      # Fabric-specific ignore patterns
 └── CLAUDE.md                       # Project-specific agent config
 ```

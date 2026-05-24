@@ -171,12 +171,50 @@ print(f"Lakehouses: {{BRONZE_LAKEHOUSE}} / {{SILVER_LAKEHOUSE}} / {{GOLD_LAKEHOU
     print("  Created: 3 - Notebooks/utilities/nb_utils_config.py")
 
 
-def create_agentic_resources(agentic_path: Path, source_reference_path: Path) -> None:
+# The reference materials ship as a top-level `reference/` folder in the
+# plugin/repo. This file must be present for the orchestrator's Stage 2 check
+# to pass; we use it as a sentinel so a partial/stub folder is never selected.
+REFERENCE_SENTINEL = "m-conversion-risk-catalog.md"
+
+
+def resolve_reference_source():
+    """Locate the bundled Fabric reference materials directory.
+
+    Tries, in order:
+      1) $CLAUDE_PLUGIN_ROOT/reference        (installed-plugin layout)
+      2) every ancestor of this script: <ancestor>/reference
+                                                (repo checkout / standalone)
+
+    Returns the first candidate that contains REFERENCE_SENTINEL (guaranteeing
+    the complete set, not a stub or an unrelated folder that merely happens to
+    be named `reference`), else None so the caller fails loudly. Walking script
+    ancestors makes this work even when CLAUDE_PLUGIN_ROOT is not exported into
+    the script's environment -- the failure mode that previously left every
+    fresh project with only stub files.
+    """
+    candidates = []
+
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if plugin_root:
+        candidates.append(Path(plugin_root) / "reference")
+
+    script_dir = Path(__file__).resolve().parent
+    for ancestor in script_dir.parents:
+        candidates.append(ancestor / "reference")
+
+    for candidate in candidates:
+        if (candidate / REFERENCE_SENTINEL).is_file():
+            return candidate
+    return None
+
+
+def create_agentic_resources(agentic_path: Path, source_reference_path) -> None:
     """Create agentic resources folder and copy Fabric reference materials."""
     reference_path = agentic_path / "reference"
     reference_path.mkdir(parents=True, exist_ok=True)
 
-    if source_reference_path.exists():
+    if source_reference_path and Path(source_reference_path).exists():
+        source_reference_path = Path(source_reference_path)
         for item in source_reference_path.iterdir():
             dest = reference_path / item.name
             if item.is_dir():
@@ -186,13 +224,22 @@ def create_agentic_resources(agentic_path: Path, source_reference_path: Path) ->
             else:
                 shutil.copy2(item, dest)
         print(f"  Copied Fabric reference materials from: {source_reference_path}")
+        if not (reference_path / REFERENCE_SENTINEL).is_file():
+            print(
+                f"  WARNING: '{REFERENCE_SENTINEL}' is missing after copy -- "
+                "the orchestrator's Stage 2 reference check will fail."
+            )
     else:
-        print(f"  Warning: Fabric reference materials not found at: {source_reference_path}")
-        (reference_path / "pyspark-style-guide.md").write_text(
-            "# PySpark Style Guide\n\nSee Agents/reference/fabric/ for the full guide.\n"
-        )
-        (reference_path / "notebook-template.md").write_text(
-            "# Notebook Template\n\nSee Agents/reference/fabric/ for the full template.\n"
+        print("  ERROR: Bundled Fabric reference materials could not be located.")
+        print("  Searched: $CLAUDE_PLUGIN_ROOT/reference and <script ancestors>/reference")
+        print("  Set CLAUDE_PLUGIN_ROOT or run from the plugin repo, then re-run.")
+        (reference_path / "MISSING-REFERENCE.md").write_text(
+            "# Reference materials missing\n\n"
+            f"The Fabric reference catalog (including `{REFERENCE_SENTINEL}`) "
+            "was not bundled with this run.\n\n"
+            "Copy the plugin's top-level `reference/` folder into this "
+            "directory before continuing the migration.\n",
+            encoding="utf-8",
         )
 
 
@@ -573,16 +620,7 @@ def main():
     # Step 3: Create agentic resources (copy Fabric reference materials)
     print("\nCreating agentic resources...")
     agentic_path = target_path / "6 - Agentic Resources"
-    # Resolution order:
-    #   1) CLAUDE_PLUGIN_ROOT/reference (when this script is bundled in the
-    #      fabric-dataflow-migration-toolkit plugin)
-    #   2) ../../../Agents/reference/fabric (legacy standalone-skill layout)
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
-    if plugin_root:
-        source_reference = Path(plugin_root) / "reference"
-    else:
-        script_dir = Path(__file__).parent
-        source_reference = script_dir.parent.parent.parent / "Agents" / "reference" / "fabric"
+    source_reference = resolve_reference_source()
     create_agentic_resources(agentic_path, source_reference)
 
     # Step 4: Generate configuration files
