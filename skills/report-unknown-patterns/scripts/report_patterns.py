@@ -132,17 +132,26 @@ def sanitize_snippet(snippet: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+# Placeholder used to round-trip escaped pipes (`\|`) through `split("|")`.
+# Markdown tables require pipes inside cells to be escaped, but the naive
+# splitter doesn't know that — without this we mis-split rows whose Sample M
+# cell contains a pipe literal (e.g. `Text.Combine(Names, " \| ")`).
+_ESCAPED_PIPE_SENTINEL = "\x00PIPE\x00"
+
+
 def parse_backlog(path: Path) -> list[dict]:
     """Parse the backlog markdown table. Returns list of pattern dicts."""
     if not path.exists():
         return []
     text = path.read_text(encoding="utf-8")
     rows = []
-    in_table = False
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("|") and not stripped.startswith("|---") and not stripped.startswith("| Pattern"):
-            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            # Protect escaped pipes before splitting on the structural `|`,
+            # then restore them inside each cell.
+            protected = stripped.replace(r"\|", _ESCAPED_PIPE_SENTINEL)
+            cells = [c.strip().replace(_ESCAPED_PIPE_SENTINEL, "|") for c in protected.strip("|").split("|")]
             if len(cells) >= 6:
                 rows.append({
                     "pattern": cells[0],
@@ -152,7 +161,6 @@ def parse_backlog(path: Path) -> list[dict]:
                     "first_seen": cells[4],
                     "status": cells[5],
                 })
-            in_table = True
     return rows
 
 
@@ -165,10 +173,12 @@ def update_backlog_status(path: Path, pattern: str, new_status: str) -> bool:
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("|") and pattern in stripped:
-            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            protected = stripped.replace(r"\|", _ESCAPED_PIPE_SENTINEL)
+            cells = [c.strip().replace(_ESCAPED_PIPE_SENTINEL, "|") for c in protected.strip("|").split("|")]
             if len(cells) >= 6 and cells[0] == pattern:
                 cells[5] = new_status
-                lines[i] = "| " + " | ".join(cells) + " |"
+                # Re-escape any literal pipes inside cells when writing back.
+                lines[i] = "| " + " | ".join(c.replace("|", r"\|") for c in cells) + " |"
                 updated = True
                 break
     if updated:
@@ -182,10 +192,26 @@ def update_backlog_status(path: Path, pattern: str, new_status: str) -> bool:
 
 
 def get_repo_from_manifest() -> str | None:
-    """Read repository URL from plugin.json."""
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    """Read repository URL from plugin.json.
+
+    Resolution order:
+      1. ``$CLAUDE_PLUGIN_ROOT`` (set by Claude Code when the skill is invoked
+         from a plugin context)
+      2. Walk up from this script's location until a ``.claude-plugin`` dir is
+         found. The script lives at
+         ``<plugin-root>/skills/report-unknown-patterns/scripts/report_patterns.py``,
+         so the manifest is exactly four levels up — but walking is more robust
+         to future re-org than a hard-coded `parent.parent.parent.parent`.
+    """
+    plugin_root: str | None = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not plugin_root:
-        plugin_root = str(Path(__file__).parent.parent.parent)
+        here = Path(__file__).resolve()
+        for ancestor in here.parents:
+            if (ancestor / ".claude-plugin" / "plugin.json").exists():
+                plugin_root = str(ancestor)
+                break
+    if not plugin_root:
+        return None
     manifest = Path(plugin_root) / ".claude-plugin" / "plugin.json"
     if not manifest.exists():
         return None
@@ -201,8 +227,64 @@ def get_repo_from_manifest() -> str | None:
     return None
 
 
+# Default colors for auto-created labels. Issue body text is informational
+# only; pick muted colors so the labels don't dominate the issue list.
+_LABEL_DEFAULTS: dict[str, dict[str, str]] = {
+    "conversion-pattern": {"color": "1d76db", "description": "M pattern needing PySpark conversion"},
+    "community-submitted": {"color": "0e8a16", "description": "Filed by the report-unknown-patterns skill"},
+}
+
+
+def ensure_labels_exist(repo: str, labels: list[str]) -> list[str]:
+    """Create any of `labels` that don't yet exist on `repo`.
+
+    Returns the list of labels that were newly created (empty if all existed
+    or if probing failed). Errors are intentionally swallowed — label creation
+    is best-effort; if it fails, `gh issue create` will surface a clear error.
+    """
+    if not labels:
+        return []
+    try:
+        probe = subprocess.run(
+            ["gh", "label", "list", "--repo", repo, "--limit", "200", "--json", "name"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+        return []
+    if probe.returncode != 0:
+        return []
+    try:
+        existing = {entry["name"] for entry in json.loads(probe.stdout or "[]")}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return []
+
+    created: list[str] = []
+    for label in labels:
+        if label in existing:
+            continue
+        defaults = _LABEL_DEFAULTS.get(label, {"color": "ededed", "description": ""})
+        try:
+            r = subprocess.run(
+                [
+                    "gh", "label", "create", label,
+                    "--repo", repo,
+                    "--color", defaults["color"],
+                    "--description", defaults["description"],
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                created.append(label)
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            continue
+    return created
+
+
 def gh_create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[str | None, str]:
     """Create a GitHub issue via gh CLI. Returns (issue_url_or_None, error_or_empty)."""
+    # Auto-create labels first so first-install runs don't fail per-pattern
+    # with `'conversion-pattern' not found`.
+    ensure_labels_exist(repo, labels)
     cmd = ["gh", "issue", "create", "--repo", repo, "--title", title, "--body", body]
     for label in labels:
         cmd.extend(["--label", label])
@@ -274,7 +356,10 @@ def main():
         sys.exit(0)
 
     rows = parse_backlog(backlog_path)
-    backlog_rows = [r for r in rows if r["status"].lower() == "backlog"]
+    # Accept both 'Backlog' (the canonical sentinel) and 'open' — the latter
+    # is what some LLM-driven runs of m-query-analyst have emitted in practice
+    # when the orchestrator prompt didn't pin the value explicitly. See #15.
+    backlog_rows = [r for r in rows if r["status"].lower() in ("backlog", "open")]
 
     if args.pattern:
         backlog_rows = [r for r in backlog_rows if args.pattern.lower() in r["pattern"].lower()]

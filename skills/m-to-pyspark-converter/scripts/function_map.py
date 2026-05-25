@@ -59,7 +59,9 @@ M_TO_PYSPARK_TEXT = {
     "Text.StartsWith": "F.col({col}).startswith({val})",
     "Text.EndsWith": "F.col({col}).endswith({val})",
     "Text.Replace": "F.regexp_replace",
-    "Text.Combine": "F.concat",
+    "Text.Combine": "F.concat_ws",   # MUST be concat_ws (NOT concat) when a separator is present —
+                                     # F.concat has no separator and propagates NULL. See catalog RISK-30.
+                                     # For an array column use F.array_join(arr, sep) instead.
     "Text.Split": "F.split",
     "Text.PadStart": "F.lpad",
     "Text.PadEnd": "F.rpad",

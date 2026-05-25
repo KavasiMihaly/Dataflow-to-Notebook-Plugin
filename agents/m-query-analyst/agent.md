@@ -106,7 +106,7 @@ Write to `1 - Documentation/m-analysis-inventory.json`:
 
 **Scan rules:**
 
-For each `.pq` file, search for the 12 known risk patterns. The catalog defines the regex/string to match for each. Record:
+For each `.pq` file, search for the 30 known risk patterns (RISK-01..RISK-30) documented in the catalog. The catalog defines the regex/string to match for each. Record:
 
 ```json
 {
@@ -157,7 +157,7 @@ This file tracks M patterns the converter encountered but doesn't have a referen
 |---|---|---|---|---|---|
 ```
 
-Append rows per unknown pattern. Status starts as `Backlog`.
+Append rows per unknown pattern. The Status cell MUST be the literal word `Backlog` (capitalized, exactly that spelling). Do NOT use `open`, `Open`, `new`, `todo`, or any other variant — the `report-unknown-patterns` skill filters on this sentinel and any other value causes the pattern to be silently skipped at Stage 13. See issue #15 for the failure mode.
 
 ## Output discipline
 
