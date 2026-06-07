@@ -272,7 +272,6 @@ claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:f
 | `fabric-cli-runner` | Execute `fab` CLI commands |
 | `fabric-lakehouse-reader` | Query lakehouse SQL endpoints |
 | `fabric-project-initializer` | Scaffold project folders + config |
-| `data-profiler` | Profile CSV / source files |
 | `fabric-notebook-deployer` | Batch `fab import` deployment |
 | `fabric-preflight-check` | Validate fab CLI + auth + workspace before run |
 | `report-unknown-patterns` | Opt-in: share unknown M patterns as sanitized GitHub issues (see Configuration section) |

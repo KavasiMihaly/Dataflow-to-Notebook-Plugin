@@ -122,15 +122,6 @@ Requirements gathering and technical discovery.
 | Gold (Dim) | `dim_{entity}` | `dim_customer` |
 | Gold (Fact) | `fct_{process}` | `fct_sales` |
 
-## Data Profiles Location
-
-**IMPORTANT**: Data profiles are stored in `1 - Documentation/data-profiles/`
-
-**Always check for existing profiles before creating notebooks:**
-```bash
-ls "1 - Documentation/data-profiles/"
-```
-
 ## Project Structure
 
 ```
@@ -141,7 +132,6 @@ ls "1 - Documentation/data-profiles/"
 │   ├── project-config.yml      # Workspace and lakehouse config
 │   └── README.md
 ├── 1 - Documentation/          # Project docs and architecture
-│   └── data-profiles/          # Data profiling results
 ├── 2 - Source Files/           # CSV/Parquet source data
 ├── 3 - Notebooks/              # PySpark notebooks
 │   ├── bronze/                 # Bronze ingestion notebooks

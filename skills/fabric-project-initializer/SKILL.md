@@ -67,8 +67,7 @@ ProjectName/
 ├── 0 - Architecture Setup/
 │   ├── project-config.yml          # Fabric project configuration
 │   └── README.md                   # Setup documentation
-├── 1 - Documentation/              # Project docs, data profiles
-│   └── data-profiles/              # Data profiling results
+├── 1 - Documentation/              # Project docs
 ├── 2 - Source Files/               # Source data / external files
 ├── 3 - Notebooks/
 │   ├── bronze/                     # Bronze layer notebooks

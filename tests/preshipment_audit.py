@@ -243,7 +243,6 @@ def gate_required_files(findings: list[dict]) -> bool:
         "skills/fabric-cli-runner/SKILL.md",
         "skills/fabric-lakehouse-reader/SKILL.md",
         "skills/fabric-project-initializer/SKILL.md",
-        "skills/data-profiler/SKILL.md",
         "skills/fabric-notebook-deployer/SKILL.md",
         "skills/fabric-preflight-check/SKILL.md",
         "skills/report-unknown-patterns/SKILL.md",

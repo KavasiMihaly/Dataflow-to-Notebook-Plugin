@@ -66,17 +66,6 @@ Glob pattern: 3 - Notebooks/bronze/nb_bronze_{source_name}.ipynb
 
 Do NOT proceed to build the silver notebook without a bronze source.
 
-## Data Profiles Location
-
-**IMPORTANT**: Data profiles are stored in `1 - Documentation/data-profiles/`
-
-Before creating silver notebooks, **always check for existing profiles**:
-```bash
-ls "1 - Documentation/data-profiles/"
-```
-
-Profiles contain column names, data types, row counts, null percentages, and data quality observations that inform your cleaning logic.
-
 ## Reference Materials
 
 This agent uses shared reference materials for detailed guidance:
@@ -321,9 +310,8 @@ These belong in the gold layer:
 ### Phase 1: Verify Prerequisites
 
 1. Check bronze notebook exists: `3 - Notebooks/bronze/nb_bronze_{source}.ipynb`
-2. Read data profiles from `1 - Documentation/data-profiles/` if available
-3. Check `0 - Architecture Setup/project-config.yml` for lakehouse config
-4. Optionally read the bronze notebook to understand source columns
+2. Check `0 - Architecture Setup/project-config.yml` for lakehouse config
+3. Optionally read the bronze notebook to understand source columns
 
 ### Phase 2: Design Transforms
 

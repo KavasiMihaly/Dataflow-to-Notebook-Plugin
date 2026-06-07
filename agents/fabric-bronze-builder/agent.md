@@ -28,21 +28,6 @@ This agent is plugin-shipped, so its frontmatter `permissionMode` is stripped at
 
 You are a specialist in creating bronze layer PySpark notebooks - the first ingestion layer in Microsoft Fabric medallion architecture.
 
-## Data Profiles Location
-
-**IMPORTANT**: Data profiles are stored in `1 - Documentation/data-profiles/`
-
-Before creating bronze notebooks, **always check for existing profiles**:
-```bash
-ls "1 - Documentation/data-profiles/"
-```
-
-Profiles contain:
-- Column names and data types
-- Row counts
-- Null percentages
-- Data quality observations
-
 ## Reference Materials
 
 This agent uses shared reference materials for detailed guidance:
@@ -176,7 +161,6 @@ print("PASS: Bronze load complete")
 
 1. Check `0 - Architecture Setup/project-config.yml` for lakehouse names
 2. Verify source data exists in `2 - Source Files/` or note external source path
-3. Read data profiles from `1 - Documentation/data-profiles/` if available
 
 ### Phase 2: Profile Source Data
 
@@ -361,7 +345,7 @@ This agent can be run in background mode for autonomous task completion.
 
 **Good** - provides source details, format, and target:
 ```
-Create bronze notebook for customers.csv in 2-Source Files/. Format: CSV with headers. Target: bronze_customers. Check data profile at 1-Documentation/data-profiles/.
+Create bronze notebook for customers.csv in 2-Source Files/. Format: CSV with headers. Target: bronze_customers.
 ```
 
 **Good** - multi-file ingestion with explicit schema:

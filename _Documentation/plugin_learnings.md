@@ -46,7 +46,7 @@ Two scripts read FABRIC_* env vars and need the helper:
 
 Each contains a `_load_plugin_userconfig_env()` helper that maps `CLAUDE_PLUGIN_OPTION_azure_*` to `FABRIC_TENANT_ID` / `FABRIC_CLIENT_ID` / `FABRIC_CLIENT_SECRET` BEFORE argparse evaluates defaults. Mirrors the dbt plugin's approach.
 
-The data-profiler is shared with the dbt plugin and uses its own `SQL_*` mapping helper.
+The data-profiler is shared with the dbt plugin and uses its own `SQL_*` mapping helper. *(Removed 2026-06-07: the data-profiler skill was deleted from this plugin — it was never invoked by the migration orchestrator and could not reach the remote sources behind Gen1 dataflows, since the pipeline only holds exported M code, not source data. Historical references below are left intact as a record.)*
 
 ### F7 — `${CLAUDE_PLUGIN_ROOT}` not `$HOME/.claude/skills/`
 

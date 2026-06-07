@@ -80,10 +80,6 @@ def create_folder_structure(target_path: Path) -> dict:
         (layer_path / ".gitkeep").touch()
     print("  Created: 3 - Notebooks/{bronze,silver,gold,utilities,orchestration}")
 
-    # Create data-profiles sub-folder
-    (target_path / "1 - Documentation" / "data-profiles").mkdir(parents=True, exist_ok=True)
-    print("  Created: 1 - Documentation/data-profiles/")
-
     # Create source-files sub-folders (raw dataflow JSON + parsed M queries)
     (target_path / "2 - Source Files" / "dataflow-json").mkdir(parents=True, exist_ok=True)
     (target_path / "2 - Source Files" / "m_queries").mkdir(parents=True, exist_ok=True)

@@ -42,8 +42,8 @@ Allowlist categories (built from a full audit of the plugin's `agent.md` and
 `SKILL.md` files — see `_Documentation/plugin_learnings.md` Finding 9):
 
   1. Plugin-internal Python scripts under `<plugin-root>/skills/*/scripts/*.py`
-     (covers profile_data, query_sql_server, load_data, run_dbt,
-     analyze_coverage, generate_docs, initialize_project, reset_project)
+     (covers query_sql_server, load_data, run_dbt, analyze_coverage,
+     generate_docs, initialize_project, reset_project)
   2. Specific `python -c` one-liners the plugin depends on (pyodbc driver check,
      CSV file-copy helper in dbt-architecture-setup)
   3. Virtualenv / pip operations used by dbt-project-initializer
