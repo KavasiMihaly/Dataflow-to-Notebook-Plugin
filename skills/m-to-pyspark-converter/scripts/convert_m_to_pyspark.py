@@ -36,7 +36,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tmdl_extractor import TmdlExtractor
 from m_parser import MParser
 from pyspark_generator import PySparkGenerator
+from polars_generator import PolarsGenerator
 from function_map import M_TO_PYSPARK_TYPES
+
+
+# Supported code-gen targets -> emitter class. PySpark stays the default so the
+# proven path is byte-for-byte unchanged; `python` emits single-node polars +
+# delta-rs (Slice 5). Both share the same MParser; only the emitter differs.
+TARGETS = {
+    "pyspark": PySparkGenerator,
+    "python": PolarsGenerator,
+}
+
+
+def get_generator(target: str):
+    """Return an emitter instance for the requested target.
+
+    Raises ValueError for an unknown target so the CLI can exit non-zero.
+    """
+    cls = TARGETS.get(target)
+    if cls is None:
+        raise ValueError(
+            f"Unknown --target {target!r}. Choose one of: {', '.join(sorted(TARGETS))}."
+        )
+    return cls()
 
 
 def to_snake_case(name: str) -> str:
@@ -51,7 +74,7 @@ def convert_tmdl_folder(args):
     """Convert all M partitions in a TMDL folder."""
     extractor = TmdlExtractor()
     parser = MParser()
-    generator = PySparkGenerator()
+    generator = get_generator(args.target)
 
     extracts = extractor.extract_from_folder(args.tmdl_path)
 
@@ -78,13 +101,13 @@ def convert_tmdl_folder(args):
 
         try:
             parsed = parser.parse(m_code)
-            pyspark_code = generator.generate(parsed, table_name, source_file)
+            generated_code = generator.generate(parsed, table_name, source_file)
 
             snake_name = to_snake_case(table_name)
             output_file = os.path.join(output_dir, f"nb_bronze_{snake_name}.py")
 
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write(pyspark_code)
+                f.write(generated_code)
 
             success_count += 1
             if args.verbose:
@@ -111,7 +134,7 @@ def convert_single_file(args):
     """Convert a single .tmdl file."""
     extractor = TmdlExtractor()
     parser = MParser()
-    generator = PySparkGenerator()
+    generator = get_generator(args.target)
 
     extracts = extractor.extract_from_file(args.tmdl_file)
 
@@ -125,13 +148,13 @@ def convert_single_file(args):
     for extract in extracts:
         table_name = extract["table_name"]
         parsed = parser.parse(extract["m_code"])
-        pyspark_code = generator.generate(parsed, table_name, extract["source_file"])
+        generated_code = generator.generate(parsed, table_name, extract["source_file"])
 
         snake_name = to_snake_case(table_name)
         output_file = os.path.join(output_dir, f"nb_bronze_{snake_name}.py")
 
         with open(output_file, "w", encoding="utf-8") as f:
-            f.write(pyspark_code)
+            f.write(generated_code)
 
         print(f"  {table_name} -> {output_file}")
 
@@ -141,24 +164,24 @@ def convert_single_file(args):
 def convert_m_file(args):
     """Convert M code from a .m file."""
     parser = MParser()
-    generator = PySparkGenerator()
+    generator = get_generator(args.target)
 
     with open(args.m_file, "r", encoding="utf-8") as f:
         m_code = f.read()
 
     table_name = os.path.splitext(os.path.basename(args.m_file))[0]
     parsed = parser.parse(m_code)
-    pyspark_code = generator.generate(parsed, table_name, args.m_file)
+    generated_code = generator.generate(parsed, table_name, args.m_file)
 
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         snake_name = to_snake_case(table_name)
         output_file = os.path.join(args.output_dir, f"nb_bronze_{snake_name}.py")
         with open(output_file, "w", encoding="utf-8") as f:
-            f.write(pyspark_code)
+            f.write(generated_code)
         print(f"  {table_name} -> {output_file}")
     else:
-        print(pyspark_code)
+        print(generated_code)
 
     return 0
 
@@ -166,19 +189,19 @@ def convert_m_file(args):
 def convert_m_string(args):
     """Convert M code from a string argument."""
     parser = MParser()
-    generator = PySparkGenerator()
+    generator = get_generator(args.target)
 
     parsed = parser.parse(args.m_code)
-    pyspark_code = generator.generate(parsed, "Query", "stdin")
+    generated_code = generator.generate(parsed, "Query", "stdin")
 
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         output_file = os.path.join(args.output_dir, "nb_bronze_query.py")
         with open(output_file, "w", encoding="utf-8") as f:
-            f.write(pyspark_code)
+            f.write(generated_code)
         print(f"  Query -> {output_file}")
     else:
-        print(pyspark_code)
+        print(generated_code)
 
     return 0
 
@@ -239,6 +262,12 @@ Examples:
 
     # Options
     argparser.add_argument(
+        "--target",
+        default="pyspark",
+        help="Code-gen target: 'pyspark' (default) emits Spark notebooks; "
+             "'python' emits single-node polars + delta-rs.",
+    )
+    argparser.add_argument(
         "--output-dir",
         help="Output directory for generated .py files (default: current directory)",
     )
@@ -254,6 +283,13 @@ Examples:
     )
 
     args = argparser.parse_args()
+
+    # Validate target early so an unknown engine fails fast with a non-zero exit
+    # (and never falls through to a half-written output).
+    if args.target not in TARGETS:
+        argparser.error(
+            f"unknown --target {args.target!r}; choose one of: {', '.join(sorted(TARGETS))}"
+        )
 
     # Dispatch to appropriate handler
     if args.list_tables:

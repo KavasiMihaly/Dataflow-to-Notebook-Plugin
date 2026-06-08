@@ -1,6 +1,6 @@
 # Plan: Python-notebook engine (PySpark ⇄ Python toggle)
 
-**Status:** Draft — Slices 0–1 complete, Slices 2–7 not started
+**Status:** Draft — Slices 0–2 + 5 complete; Slices 3, 4, 6, 7 not started
 **Created:** 2026-06-07
 **Last updated:** 2026-06-07
 **Research:** `_Research/python-notebook-engine-implementation.md` (decision matrix, full PySpark→polars translation reference, gap analysis, confirmed metadata)
@@ -88,7 +88,7 @@ The Python notebook is a 2-vCore / 16 GB single-node runtime that starts faster 
 
 ---
 
-## Slice 2 — Python reference set + utilities notebook (offline)
+## Slice 2 — Python reference set + utilities notebook (offline) ✅ DONE 2026-06-08
 
 **Goal:** author the Python-engine knowledge the builders read, plus the runtime helper notebook.
 
@@ -122,6 +122,17 @@ The Python notebook is a 2-vCore / 16 GB single-node runtime that starts faster 
 **Success criteria:** Python reference set exists, valid, self-consistent with confirmed metadata; `table_path()` handles both lakehouse modes; PySpark scaffold untouched.
 
 **Security:** helpers use `notebookutils.credentials.getSecret` for any secret; no connection strings; no local paths; writes target only the bound lakehouse.
+
+**Outcome note (2026-06-08, Slice 2 implementation):**
+- **Files created:** `reference/python-notebook-metadata.md`, `reference/python-style-guide.md`, `reference/python-delta-patterns.md`, `skills/fabric-project-initializer/templates/nb_utils_config_python.ipynb`, `tests/test_python_reference_set.py`. **Edited:** `skills/fabric-project-initializer/scripts/initialize_fabric_project.py` (added `create_python_utility_notebook()` + an engine branch in `main()`'s Step 2).
+- **All 8 Slice-2 tests green** (RED→GREEN verified). Regression: `preshipment_audit.py`, `test_engine_toggle.py`, `test_risk_catalog.py` all stay green; PySpark scaffold path untouched (test 7).
+- **Decision — utils-notebook placement:** template lives at `skills/fabric-project-initializer/templates/nb_utils_config_python.ipynb` (mirrors the existing `templates/fabric-CLAUDE.md` convention; the initializer substitutes `__PLACEHOLDER__` tokens and writes the scaffolded copy to `3 - Notebooks/utilities/nb_utils_config.ipynb`). The PySpark `.py` utility is **not** written when `engine=python` (one engine per project).
+- **Decision — `table_path()` schema-detection source:** `project-config.yml` (`medallion.layers.*.schema_enabled`), surfaced into a module-level `SCHEMA_ENABLED` constant in the utils notebook. **Default `False` (classic lakehouse)** — the safe default per research §5 (a classic path under a classic lakehouse always registers; schema-enabled lakehouses set it `True` to write under `Tables/dbo/<name>`). `table_path(name, schema_enabled=None)` falls back to `SCHEMA_ENABLED` when the kwarg is omitted, and accepts an explicit override (unit-tested both ways).
+- **Decision — metadata block:** mirror Fabric's full export verbatim (keep the harmless `spark_compute` + `nteract` residue rather than stripping) — lowest-risk; the "is stripping `spark_compute` safe?" micro-question stays deferred to the Slice 3 `fab`-deploy round-trip. Templated `jupyter_kernel_name` = `python3.11` (documented Fabric default; informational, Fabric adjusts on deploy).
+- **Decision — lakehouse-id binding:** the scaffolded notebook's `dependencies.lakehouse` uses readable placeholders (`<bronze-lakehouse-id>`, `<workspace-id>`) offline — no fake GUIDs ship; bound at Fabric deploy time. Bronze lakehouse is bound by default in the utils notebook (matches the PySpark default-lakehouse convention).
+- **Decision — `add_silver_metadata`:** drops bronze ingestion cols (`_load_timestamp`/`_source_file`/`_load_id`) and stamps `_silver_processed_timestamp` (the bronze→silver metadata swap the silver contract needs in Slice 4).
+- **Auto-copy confirmed:** the 3 new `reference/*.md` files ship into a scaffolded project automatically via the existing `create_agentic_resources()` (copies the whole `reference/` folder) — no initializer change needed for the refs.
+- **Deferred (unchanged from plan):** builders don't consume these yet (Slice 3/4); `fab`-deploy round-trip + delta-rs merge maturity (Slice 3/4); the `spark_compute`-stripping micro-question.
 
 ---
 
@@ -193,7 +204,7 @@ The Python notebook is a 2-vCore / 16 GB single-node runtime that starts faster 
 
 ---
 
-## Slice 5 — M→Python converter
+## Slice 5 — M→Python converter ✅ DONE 2026-06-08
 
 **Goal:** `m-to-pyspark-converter` gains `--target python|pyspark`, emitting polars from the same M parse.
 
@@ -222,6 +233,32 @@ The Python notebook is a 2-vCore / 16 GB single-node runtime that starts faster 
 **Success criteria:** both targets emit from one parse; PySpark target unchanged; polars target covers the documented mapping; unknowns degrade to TODO.
 
 **Security:** converter strips connection strings/credentials (existing behaviour) on both targets.
+
+### Outcome note (implementation pass — NOT marked Done; main agent to confirm)
+
+**Status:** implemented + all 6 plan tests green. Left for the main agent to mark Done.
+
+**Files created/edited:**
+- NEW `skills/m-to-pyspark-converter/scripts/polars_generator.py` — `PolarsGenerator`, mirrors `PySparkGenerator`'s structure, shares `MParser`.
+- `skills/m-to-pyspark-converter/scripts/function_map.py` — added `M_TO_POLARS_TYPES`, `M_TO_POLARS_JOIN`, `M_TO_POLARS_AGG`, `M_TO_POLARS_TEXT` + resolvers `get_polars_type`/`get_polars_join_type`/`get_polars_agg`.
+- `skills/m-to-pyspark-converter/scripts/convert_m_to_pyspark.py` — `--target python|pyspark` (default `pyspark`); `TARGETS` map + `get_generator()`; unknown target → `argparser.error` (non-zero exit).
+- `skills/m-to-pyspark-converter/SKILL.md` — description broadened to both targets (skill **name unchanged** for compatibility); added polars mapping reference + `--target python` usage.
+- NEW `tests/test_converter_python_target.py` — the 6 plan tests + 1 bonus security parity test. All green.
+
+**Tests:** 1 `test_target_pyspark_unchanged` ✅ · 2 `test_target_python_table_ops` ✅ · 3 `test_target_python_type_map` ✅ · 4 `test_target_python_expressions` ✅ · 5 `test_target_python_unknown_emits_todo` ✅ · 6 `test_cli_rejects_unknown_target` ✅. Regressions green: `preshipment_audit`, `test_engine_toggle`, `test_risk_catalog`, `test_report_patterns_parser`.
+
+**Default decisions made (research §4 ambiguities), documented inline in code:**
+- **No existing converter `.pq`/regression fixtures existed** (git-log "regression tests" = `test_risk_catalog.py`, not converter). Used inline M-string fixtures inside the new test — no separate fixtures dir needed.
+- **`Table.Combine` → `pl.concat([...], how="diagonal_relaxed")`** (research §4 gave only "concat"). `diagonal_relaxed` is the union-by-name-with-schema-superset analogue of Spark `unionByName`; chosen so mismatched/extra columns don't crash.
+- **`JoinKind.RightAnti` → `how="anti"` + review TODO.** polars has no right-anti `how`; "anti" is left-anti. Emits a TODO telling the user to swap operands if true right-anti is needed.
+- **Sort:** all-descending → `descending=True`; all-ascending → bare; mixed → `descending=[...]` list.
+- **`Table.TransformColumnTypes` decimal/`Currency.Type`** uses `pl.Decimal(19, 4)` / `pl.Decimal(38, 18)` per the §4 addendum.
+- **`Table.Buffer` → no-op** (polars eager; emits a comment, keeps `df` unchanged).
+- **Unknown M op → same `# TODO` block** the PySpark emitter uses (parity; never crashes).
+- **Write idiom** = `write_deltalake(table_path(target_table), df.to_arrow(), mode="overwrite", schema_mode="overwrite")`; reads via `pl.read_delta(table_path(...))`. The `table_path()` resolver is expected from the Slice 2 Python utilities notebook (not this slice's responsibility).
+- **Security:** source connection strings (server/db) appear **only in comments**, never executable code — verified by the bonus test.
+
+**Deferred / not in this slice:** the actual `table_path()` helper + Python `nb_utils_config` (Slice 2); builder integration calling `--target python` (Slice 3/4). The polars emitter currently outputs `.py` source text via `--m-code/--m-file` exactly like the PySpark emitter; wrapping into `.ipynb` is the builder's job, unchanged here.
 
 ---
 

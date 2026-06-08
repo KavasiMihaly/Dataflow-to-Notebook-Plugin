@@ -176,10 +176,92 @@ M_REPLACER = {
 }
 
 
+# ---------------------------------------------------------------------------
+# M -> Python (polars) mappings (Slice 5).
+#
+# Mirrors the M->PySpark tables above for the `--target python` emitter.
+# Source of truth: _Research/python-notebook-engine-implementation.md §4
+# (PySpark -> Python translation reference + type-mapping addendum).
+# ---------------------------------------------------------------------------
+
+# M data types -> polars dtype expressions (used with .cast())
+M_TO_POLARS_TYPES = {
+    "type text": "pl.Utf8",
+    "type number": "pl.Float64",
+    "Int64.Type": "pl.Int64",
+    "Int32.Type": "pl.Int32",
+    "type date": "pl.Date",
+    "type datetime": "pl.Datetime",
+    "type datetimezone": "pl.Datetime",
+    "type logical": "pl.Boolean",
+    "type binary": "pl.Binary",
+    "Decimal.Type": "pl.Decimal(38, 18)",
+    "Currency.Type": "pl.Decimal(19, 4)",
+    "Percentage.Type": "pl.Float64",
+    "type time": "pl.Time",
+    "type duration": "pl.Duration",
+    "type any": "pl.Utf8",
+}
+
+# M JoinKind -> polars join `how` parameter.
+# polars has no native left_anti/right_anti `how`; "anti" is left-anti and is the
+# closest match, so LeftAnti -> "anti". RightAnti has no direct polars `how`
+# (would require swapping operands) and degrades to "anti" with a review TODO
+# emitted by the generator.
+M_TO_POLARS_JOIN = {
+    "JoinKind.LeftOuter": "left",
+    "JoinKind.Inner": "inner",
+    "JoinKind.RightOuter": "right",
+    "JoinKind.FullOuter": "full",
+    "JoinKind.LeftAnti": "anti",
+    "JoinKind.RightAnti": "anti",
+}
+
+# M aggregation functions -> polars expression-method names (applied to pl.col(x)).
+# e.g. List.Sum([Amount]) -> pl.col("Amount").sum()
+M_TO_POLARS_AGG = {
+    "List.Sum": "sum",
+    "List.Average": "mean",
+    "List.Min": "min",
+    "List.Max": "max",
+    "List.Count": "count",
+    "List.Distinct": "n_unique",
+    "List.First": "first",
+    "List.Last": "last",
+}
+
+# M text functions -> polars str-namespace method names (applied to pl.col(x)).
+M_TO_POLARS_TEXT = {
+    "Text.Upper": "to_uppercase",
+    "Text.Lower": "to_lowercase",
+    "Text.Trim": "strip_chars",
+    "Text.TrimStart": "strip_chars_start",
+    "Text.TrimEnd": "strip_chars_end",
+    "Text.Length": "len_chars",
+    "Text.Reverse": "reverse",
+}
+
+
 def get_pyspark_type(m_type: str) -> str:
     """Convert M type string to PySpark type. Returns StringType() for unknown."""
     m_type = m_type.strip().strip('"').strip("'")
     return M_TO_PYSPARK_TYPES.get(m_type, "StringType()")
+
+
+def get_polars_type(m_type: str) -> str:
+    """Convert M type string to a polars dtype expression. Default pl.Utf8."""
+    m_type = m_type.strip().strip('"').strip("'")
+    return M_TO_POLARS_TYPES.get(m_type, "pl.Utf8")
+
+
+def get_polars_join_type(m_join_kind: str) -> str:
+    """Convert M JoinKind to polars join `how`. Default 'left'."""
+    return M_TO_POLARS_JOIN.get(m_join_kind.strip(), "left")
+
+
+def get_polars_agg(m_agg: str) -> str:
+    """Convert M List.* aggregation to a polars expr-method name. Default 'first'."""
+    return M_TO_POLARS_AGG.get(m_agg.strip(), "first")
 
 
 def get_step_type(function_name: str) -> str:

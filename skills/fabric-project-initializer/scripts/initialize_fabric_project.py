@@ -167,6 +167,47 @@ print(f"Lakehouses: {{BRONZE_LAKEHOUSE}} / {{SILVER_LAKEHOUSE}} / {{GOLD_LAKEHOU
     print("  Created: 3 - Notebooks/utilities/nb_utils_config.py")
 
 
+# Placeholder -> config substitutions for the Python utilities notebook template.
+# The lakehouse-id / workspace-id placeholders are bound later in Fabric (the
+# scaffold has no real GUIDs offline); they are left as readable placeholders so
+# no fake identifiers ship and the lakehouse binding is filled at deploy time.
+def create_python_utility_notebook(target_path: Path, config: dict) -> None:
+    """Create the Python (jupyter-kernel) nb_utils_config.ipynb when engine=python.
+
+    Sources a valid `.ipynb` template (jupyter kernel + jupyter_python language
+    group, polars/delta-rs helpers) and substitutes the project's display name,
+    workspace, and lakehouse names. The PySpark `.py` utility is NOT written in
+    this branch (one engine per project).
+    """
+    template_path = (
+        Path(__file__).resolve().parent.parent
+        / "templates"
+        / "nb_utils_config_python.ipynb"
+    )
+    if not template_path.is_file():
+        print(f"  ERROR: Python utilities template not found: {template_path}")
+        print("  Ensure the skill ships templates/nb_utils_config_python.ipynb.")
+        raise FileNotFoundError(f"Required template not found: {template_path}")
+
+    content = template_path.read_text(encoding="utf-8")
+    replacements = {
+        "__PROJECT_DISPLAY_NAME__": config["display_name"],
+        "__WORKSPACE__": config["workspace"],
+        "__BRONZE_LAKEHOUSE__": config["bronze_lakehouse"],
+        "__SILVER_LAKEHOUSE__": config["silver_lakehouse"],
+        "__GOLD_LAKEHOUSE__": config["gold_lakehouse"],
+        # Bound in Fabric at deploy time; kept as readable placeholders offline.
+        "__BRONZE_LAKEHOUSE_ID__": "<bronze-lakehouse-id>",
+        "__WORKSPACE_ID__": "<workspace-id>",
+    }
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
+
+    utility_path = target_path / "3 - Notebooks" / "utilities" / "nb_utils_config.ipynb"
+    utility_path.write_text(content, encoding="utf-8")
+    print("  Created: 3 - Notebooks/utilities/nb_utils_config.ipynb (Python engine)")
+
+
 # The reference materials ship as a top-level `reference/` folder in the
 # plugin/repo. This file must be present for the orchestrator's Stage 2 check
 # to pass; we use it as a sentinel so a partial/stub folder is never selected.
@@ -620,9 +661,12 @@ def main():
     print("Creating folder structure...")
     create_folder_structure(target_path)
 
-    # Step 2: Create utility notebooks
+    # Step 2: Create utility notebooks (engine-aware: one engine per project)
     print("\nCreating utility notebooks...")
-    create_utility_notebook(target_path, config)
+    if config["engine"] == "python":
+        create_python_utility_notebook(target_path, config)
+    else:
+        create_utility_notebook(target_path, config)
 
     # Step 3: Create agentic resources (copy Fabric reference materials)
     print("\nCreating agentic resources...")

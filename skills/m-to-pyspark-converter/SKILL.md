@@ -1,23 +1,28 @@
 ---
 name: m-to-pyspark-converter
-description: Convert Power Query M code from PBIP semantic models (TMDL) to Fabric PySpark notebooks. Extracts M expressions from partition definitions in .tmdl table files, parses transformations, and generates equivalent PySpark code. Use when migrating Power BI models to Fabric notebooks, converting dataflow logic to PySpark, or translating M expressions. Accepts TMDL folders, .tmdl files, or raw M code.
+description: Convert Power Query M code from PBIP semantic models (TMDL) to Fabric notebooks — PySpark (default) or single-node Python (polars + delta-rs) via `--target python`. Extracts M expressions from partition definitions in .tmdl table files, parses transformations, and generates equivalent code for the chosen engine. Use when migrating Power BI models to Fabric notebooks, converting dataflow logic to PySpark or polars, or translating M expressions. Accepts TMDL folders, .tmdl files, or raw M code.
 allowed-tools: Read Write Edit Glob Grep
 paths: "**/*.tmdl, **/*.pq"
 ---
 
-# M-to-PySpark Converter
+# M-to-Notebook Converter (PySpark or Python)
 
-Convert Power Query M code from PBIP semantic models (TMDL format) to Microsoft Fabric PySpark notebooks.
+Convert Power Query M code from PBIP semantic models (TMDL format) to Microsoft Fabric notebooks. Two code-gen targets share one M parser:
+
+- `--target pyspark` (default) — Spark notebooks (`spark.read`, `F.*`, `saveAsTable`).
+- `--target python` — single-node Python notebooks (`polars` + `delta-rs`), for the Fabric Python-notebook runtime.
+
+> The skill name is kept as `m-to-pyspark-converter` for compatibility; it now emits both engines.
 
 ## Overview
 
-Many organizations have existing Power Query M code in Power BI semantic models that needs to be migrated to Fabric PySpark notebooks. This skill automates the conversion by:
+Many organizations have existing Power Query M code in Power BI semantic models that needs to be migrated to Fabric notebooks. This skill automates the conversion by:
 
 1. **Extracting** M code from `partition = m` blocks in `.tmdl` files
 2. **Parsing** M let/in expressions into a structured intermediate representation
-3. **Generating** equivalent PySpark code following Fabric notebook conventions
+3. **Generating** equivalent code for the selected engine following Fabric notebook conventions
 
-The converter handles the 20+ most common M transformation functions and produces clean, readable PySpark with original M code preserved as comments for review.
+The converter handles the 20+ most common M transformation functions and produces clean, readable code with original M code preserved as comments for review. The same parse drives both emitters; only the emitter (PySpark vs polars) is engine-specific.
 
 ## Prerequisites
 
@@ -68,6 +73,89 @@ python scripts/convert_m_to_pyspark.py --tmdl-path "path" --output-dir "3 - Note
 ```bash
 python scripts/convert_m_to_pyspark.py --tmdl-path "path" --verbose
 ```
+
+### Choose the engine target
+
+```bash
+python scripts/convert_m_to_pyspark.py --tmdl-path "path" --target python
+```
+
+`--target pyspark` (the default) is unchanged. `--target python` emits single-node
+polars + delta-rs. An unknown target exits non-zero with a clear error.
+
+## M-to-Python (polars) Mapping Reference
+
+Emitted with `--target python`. Source of truth: the research §4 translation table.
+
+### Table Operations
+
+| M Function | polars Equivalent |
+|-----------|-------------------|
+| `Table.SelectRows(t, each ...)` | `df.filter(...)` |
+| `Table.AddColumn(t, "name", each ...)` | `df.with_columns((...).alias("name"))` |
+| `Table.RenameColumns(t, {{"old","new"}})` | `df.rename({"old": "new"})` |
+| `Table.RemoveColumns(t, {"col"})` | `df.drop("col")` |
+| `Table.SelectColumns(t, {"col"})` | `df.select("col")` |
+| `Table.TransformColumnTypes(t, {{"col", type}})` | `df.with_columns(pl.col("col").cast(...))` |
+| `Table.Sort(t, {{"col", Order.Descending}})` | `df.sort("col", descending=True)` |
+| `Table.Group(t, {"grp"}, {{"agg", each List.Sum([c])}})` | `df.group_by("grp").agg(pl.col("c").sum().alias("agg"))` |
+| `Table.NestedJoin(...)` + `Table.ExpandTableColumn(...)` | `df.join(df_right, on=..., how=...)` |
+| `Table.Distinct(t)` | `df.unique()` |
+| `Table.Combine({t1, t2})` | `pl.concat([df, df2], how="diagonal_relaxed")` |
+| `Table.ReplaceValue(t, old, new, ...)` | `df.with_columns(pl.col(c).str.replace_all/ fill_null / when-then)` |
+| `Table.FillDown(t, {"col"})` | `df.with_columns(pl.col("col").forward_fill())` |
+| `Table.Pivot(...)` | `df.pivot(..., aggregate_function="first")` |
+| `Table.Unpivot(...)` | `df.unpivot(on=[...], variable_name=..., value_name=...)` |
+| `Table.FirstN(t, n)` | `df.head(n)` |
+| `Table.Buffer(t)` | no-op (polars is eager) |
+| `Table.DuplicateColumn(t, "src", "new")` | `df.with_columns(pl.col("src").alias("new"))` |
+
+### Data Types
+
+| M Type | polars Type |
+|--------|-------------|
+| `type text` | `pl.Utf8` |
+| `type number` | `pl.Float64` |
+| `Int64.Type` | `pl.Int64` |
+| `Int32.Type` | `pl.Int32` |
+| `type date` | `pl.Date` |
+| `type datetime` | `pl.Datetime` |
+| `type logical` | `pl.Boolean` |
+| `Decimal.Type` | `pl.Decimal(38, 18)` |
+| `Currency.Type` | `pl.Decimal(19, 4)` |
+
+### Join Types
+
+| M Join Kind | polars `how` |
+|------------|--------------|
+| `JoinKind.LeftOuter` | `"left"` |
+| `JoinKind.Inner` | `"inner"` |
+| `JoinKind.RightOuter` | `"right"` |
+| `JoinKind.FullOuter` | `"full"` |
+| `JoinKind.LeftAnti` | `"anti"` |
+
+`JoinKind.RightAnti` has no direct polars `how`; it degrades to `"anti"` with a review TODO.
+
+### Expression Patterns
+
+| M Pattern | polars Equivalent |
+|-----------|-------------------|
+| `each [Column]` | `pl.col("Column")` |
+| `each [Col] = "value"` | `pl.col("Col") == "value"` |
+| `each if [X] then Y else Z` | `pl.when(...).then(Y).otherwise(Z)` |
+| `each [A] & [B]` | `pl.concat_str([pl.col("A"), pl.col("B")])` |
+| `Text.Upper([Col])` | `pl.col("Col").str.to_uppercase()` |
+| `Text.Contains([Col], "x")` | `pl.col("Col").str.contains("x", literal=True)` |
+
+### Write idiom
+
+```python
+write_deltalake(table_path(target_table), df.to_arrow(),
+                mode="overwrite", schema_mode="overwrite")
+```
+
+Reads/writes go through a `table_path()` resolver (provided by the Python utilities
+notebook) so the schema-enabled-vs-classic lakehouse path is handled in one place.
 
 ## M-to-PySpark Mapping Reference
 
