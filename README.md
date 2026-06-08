@@ -159,12 +159,29 @@ Prompted on install, editable later via `/plugin`. Sensitive values are stored i
 | `bronze_lakehouse` | no | no | Default `lh_bronze` |
 | `silver_lakehouse` | no | no | Default `lh_silver` |
 | `gold_lakehouse` | no | no | Default `lh_gold` |
+| `notebook_engine` | no | no | `pyspark` (default) / `python` — notebook compute engine. See "Notebook engine" below |
 | `azure_tenant_id` | cond. | no | For SP auth |
 | `azure_client_id` | cond. | no | For SP auth |
 | `azure_client_secret` | cond. | **yes** | For SP auth — keychain-stored |
 | `report_unknown_patterns` | no | no | `never` (default) / `ask` / `always` — controls the opt-in pattern-sharing skill (see "Optional: Sharing unknown M patterns" below) |
 
 \* Can be supplied at runtime via the orchestrator's Stage 1 questions.
+
+### Notebook engine (`pyspark` | `python`)
+
+A migration emits notebooks for **one** compute engine, chosen once via the `notebook_engine` userConfig or the orchestrator's `--engine python|pyspark` flag (the flag wins). The choice is recorded in `0 - Architecture Setup/project-config.yml` under `project.engine` and in Section 0 of `migration-design.md`.
+
+| | `pyspark` (default) | `python` |
+|---|---|---|
+| Kernel | `synapse_pyspark` (Spark cluster) | `jupyter` (`microsoft.language_group: jupyter_python`) |
+| Runtime | Distributed Spark | Single-node (2 vCore / 16 GB) |
+| Libraries | PySpark / Spark SQL | polars / duckdb / delta-rs |
+| Best for | Larger / distributed workloads | Low-volume (sub-gigabyte) workloads — faster start, lower cost |
+| Guidance | [Fabric notebook selection guide](https://learn.microsoft.com/en-us/fabric/data-engineering/fabric-notebook-selection-guide) | same |
+
+The migration holds only M code (never source rows), so there is **no data-driven engine advisory** — picking the engine is the user's call, and the single-node memory caveat surfaces in the Stage 7 approval text.
+
+> **Status:** the toggle is plumbed end-to-end (config → `--engine` flag → `project-config.yml` → Section 0), but **Python notebook generation is not yet wired** — the bronze/silver builders currently emit PySpark for both values. Until the Python engine slices land, selecting `python` is recorded and warned about, but still produces PySpark notebooks. Leave the default `pyspark` for now.
 
 ### Optional: Sharing unknown M patterns
 

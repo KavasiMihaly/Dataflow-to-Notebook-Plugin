@@ -94,7 +94,7 @@ This is the single source of truth. **Only you write to it** (except `migration-
 **Target Fabric workspace:** {name} ({GUID})
 
 ## 0. Configuration
-{workspace, lakehouses, auth method — written Stage 1}
+{workspace, lakehouses, notebook engine (pyspark|python), auth method — written Stage 1}
 
 ## 1. Migration Goals
 {written by migration-analyst Stage 6 — refactor strictness, target outcomes}
@@ -190,6 +190,18 @@ Record mode in your TodoWrite list.
 
 Read `${CLAUDE_PLUGIN_OPTION_fabric_workspace_id}`, `${CLAUDE_PLUGIN_OPTION_source_workspace_id}`, etc. from environment.
 
+#### Stage 1 — Notebook-engine resolution
+
+Resolve the notebook compute **engine** once, before any other config:
+
+1. If the run was launched with an `--engine python|pyspark` flag, that wins.
+2. Else read `${CLAUDE_PLUGIN_OPTION_notebook_engine}` — accept `pyspark` or `python`.
+3. Else default to `pyspark`.
+
+Reject any other value with a clear error and halt. Record the resolved engine in Section 0 (`Notebook engine: pyspark | python`). One engine per migration — never mix.
+
+> ⚠️ **Interim limitation (until the Python builder slices land):** the engine is *recorded and threaded into scaffolding*, but the bronze/silver builders still emit **PySpark** notebooks regardless of engine. If the resolved engine is `python`, you MUST warn the user at Stage 1 and again in the Stage 7 approval text: *"engine=python is recorded, but Python (single-node polars/duckdb/delta-rs) notebook generation is not yet wired — this run will still produce PySpark notebooks. Continue with PySpark, or abort and wait for the Python engine slices."* Do not silently emit PySpark under a `python` label.
+
 #### Stage 1a — Source-workspace discovery (only if source_workspace_id is empty AND `--sample` flag is NOT set)
 
 If the user has no `source_workspace_id` in their userConfig and is not using `--sample`, they may not know which workspace to migrate yet. Offer tenant-wide discovery via `AskUserQuestion`:
@@ -277,7 +289,7 @@ If `fresh build` mode, scaffold the project layout AND copy plugin reference mat
 Atomic call:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-project-initializer/scripts/initialize_fabric_project.py" --target . --name "<project>" --workspace "<workspace>" --bronze-lakehouse "<bronze>" --silver-lakehouse "<silver>" --gold-lakehouse "<gold>" --description "<desc>" --force
+python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-project-initializer/scripts/initialize_fabric_project.py" --target . --name "<project>" --workspace "<workspace>" --bronze-lakehouse "<bronze>" --silver-lakehouse "<silver>" --gold-lakehouse "<gold>" --engine "<engine>" --description "<desc>" --force
 ```
 
 The initializer always copies the plugin's `reference/` folder into the scaffolded project's `6 - Agentic Resources/reference/` (this is the fix for finding N14 — see `_Documentation/plugin_learnings.md`). After scaffolding completes, these five files exist as project-local paths:
@@ -473,6 +485,8 @@ Write Sections 6, 7 (Bronze Build Plan), 8 (Silver Build Plan).
 
 - Source workspace: {name} ({N} dataflows, {M} queries)
 - Target Fabric workspace: {name}
+- Notebook engine: {pyspark | python}
+  {if python: "⚠️ Single-node runtime (2 vCore / 16 GB) — suited to sub-gigabyte workloads. INTERIM: Python generation is not yet wired; this run emits PySpark notebooks. See Stage 1 warning."}
 - Notebooks to be generated:
   - Bronze: {N_bronze}
   - Silver: {N_silver}

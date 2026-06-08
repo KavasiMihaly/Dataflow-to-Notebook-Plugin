@@ -66,6 +66,8 @@ OOM guidance from the doc: *"If you encounter OOM when loading large volume of d
 - **Write** a delta table: `deltalake.write_deltalake(path, arrow_or_df, mode=...)` or polars `df.write_delta(path, mode=...)`.
 - UI affordances ("drag & drop", "Load data", "Browse code snippet → Write data to delta table") confirm these are the blessed patterns.
 
+> **★ Empirical finding (2026-06-07) — list/enumerate lakehouse files via the MOUNT, not `notebookutils.fs.ls` on `abfss://`, in Python notebooks.** Live-tested against the default lakehouse (`Files/crimedata`): `os.walk("/lakehouse/default/Files/crimedata")` returned results immediately, but `notebookutils.fs.ls("abfss://…/Files/crimedata")` **hung ~90 s then threw** `HttpResponseError: InternalServerError — "Data at the root level is invalid. Line 1, position 1."` (a 500 from the OneLake DFS endpoint whose body the SDK fails to parse as XML). In a **pure Python notebook** the DFS-backed `fs.ls` path is the flaky one; the FUSE mount (`/lakehouse/default/...`) bypasses that endpoint and is reliable. **Generated Python notebooks should do file I/O / listing through the mount** (`os` / `glob` / `pathlib`), reserving `notebookutils.fs` for cross-lakehouse cases where no mount exists (and even then, wrap in retry/try-except). Bake this into the Python style guide (Slice 2). Note this is *file* enumeration; delta-table reads via `pl.read_delta`/`deltalake` use OneLake directly and are unaffected.
+
 ### 3.4 NotebookUtils (available in Python notebooks)
 - `notebookutils.fs`, `notebookutils.notebook.run()/.runMultiple()`, `notebookutils.runtime.context` (run id for `_load_id`), `notebookutils.credentials.getSecret(...)`, `notebookutils.session.restartPython()`.
 - **`notebookutils.data.connect_to_artifact(...)`** (preview, **Python-notebook only**): opens an ODBC/T-SQL connection to a Lakehouse/Warehouse/SQL endpoint and returns a `.query("SELECT …")` → DataFrame. Useful for SQL-source bronze ingestion without Spark JDBC.
@@ -194,20 +196,37 @@ When `write_deltalake` / `polars.write_delta` writes Delta files to a managed pa
 
 ## 8. Open questions / de-risking (do these before building)
 
-1. **★ Exact Python-kernel `.ipynb` metadata (BLOCKER).** Not documented as JSON. The doc only warns: *"Make sure the language and kernel properties in notebook metadata of the public API payload are set properly."* PySpark today uses:
+1. **✅ RESOLVED (Slice 0, 2026-06-07) — Python-kernel `.ipynb` metadata confirmed empirically.** Captured from a real Fabric Python notebook exported by the user (`_Research/Notebook_Python_Test.ipynb`). The kernel is **`jupyter`** (not `synapse_pyspark`); the true engine discriminator is **`microsoft.language_group: "jupyter_python"`**. `nbformat: 4`, `nbformat_minor: 5`.
+
+   **PySpark (today):**
    ```json
    "kernel_info": {"name": "synapse_pyspark"},
    "kernelspec": {"name": "synapse_pyspark", "display_name": "Synapse PySpark"},
    "language_info": {"name": "python"}
    ```
-   Best-known Python equivalent (TO CONFIRM): kernel name `jupyter` with a `microsoft.language: "python"` hint, e.g.
+   **Python (CONFIRMED) — exact metadata Fabric emits:**
    ```json
-   "kernel_info": {"name": "jupyter"},
-   "kernelspec": {"name": "jupyter", "display_name": "Python (jupyter)", "language": "python"},
+   "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
+   "kernelspec": {"name": "jupyter", "display_name": "Jupyter"},
    "language_info": {"name": "python"},
-   "microsoft": {"language": "python", "language_group": "jupyter"}
+   "microsoft": {"language": "python", "language_group": "jupyter_python"},
+   "nteract": {"version": "nteract-front-end@1.0.0"},
+   "spark_compute": {"compute_id": "/trident/default", "session_options": {"conf": {"spark.synapse.nbs.session.timeout": "1200000"}}},
+   "dependencies": {
+     "lakehouse": {
+       "known_lakehouses": [{"id": "<lakehouse-id>"}],
+       "default_lakehouse": "<lakehouse-id>",
+       "default_lakehouse_name": "<lakehouse-name>",
+       "default_lakehouse_workspace_id": "<workspace-id>"
+     }
+   }
    ```
-   **De-risk:** create one Python notebook in the Fabric UI, export it with the plugin's `fabric-cli-runner` (`fab notebook export`) and inspect `notebook-content.ipynb` metadata. **This single artifact unblocks the whole template.** Step 0 of implementation.
+   **Notes for the builder/template (Slice 2):**
+   - Minimum to make Fabric treat it as Python: `kernel_info.name = "jupyter"` **and** the `microsoft` block with `language_group: "jupyter_python"`. Set both; don't rely on one alone.
+   - `dependencies.lakehouse` shape is **identical to PySpark** (same `known_lakehouses`/`default_lakehouse*` keys) — the existing builder logic for lakehouse binding ports unchanged; only the kernel/`microsoft` block differs.
+   - The exported runtime kernel was **python3.12** (docs say 3.10/3.11 default — Fabric has since moved; `jupyter_kernel_name` is informational, the deploy honors the workspace default if omitted).
+   - `spark_compute` + `nteract` blocks appear even on a Python notebook (Fabric adds them on export). They're harmless residue for the `jupyter` kernel; **safest to mirror exactly what Fabric emits** rather than strip them. Open micro-question: whether omitting `spark_compute` on a `jupyter` notebook is fine on deploy (low risk — likely ignored).
+   - The structure hook (`validate-fabric-structure.py`) doesn't check kernel name, so this metadata passes today; the validator should *positively* assert `microsoft.language_group == "jupyter_python"` for the Python engine (Slice 6).
 2. **Schema-enabled vs classic lakehouse.** Confirm the target lakehouses' schema mode and bake `schema_enabled` into `project-config.yml` so `table_path()` chooses `Tables/dbo/<n>` vs `Tables/<n>` (§5).
 3. **delta-rs merge maturity.** Confirm `DeltaTable.merge(...)` covers the upsert patterns the gold/silver templates need on the pinned runtime; fall back to read-modify-overwrite for small tables if a merge feature is missing.
 4. **`%run` utilities as a notebook item.** Confirm the scaffolded `nb_utils_config` deploys as a notebook item (not a `.py` resource) so `%run` resolves in Python notebooks (§3.6).
@@ -219,7 +238,7 @@ When `write_deltalake` / `polars.write_delta` writes Delta files to a managed pa
 
 Each slice is end-to-end runnable on the bundled `--sample` dataflows in `--dry-run` (no Fabric access). TDD per global rules: failing test first.
 
-- **Slice 0 — Metadata spike (de-risk #1).** Obtain & record the real Python-notebook metadata JSON in `reference/python-notebook-metadata.md`. *Test:* a deployed Python notebook round-trips through `fab` as a Python notebook. *(One-off spike — flag as not-TDD.)*
+- **Slice 0 — Metadata spike (de-risk #1). ✅ DONE 2026-06-07.** Real Python-notebook metadata captured from `_Research/Notebook_Python_Test.ipynb` and recorded in §8.1 (kernel `jupyter`, discriminator `microsoft.language_group: "jupyter_python"`, lakehouse-binding shape unchanged). Durable artifact `reference/python-notebook-metadata.md` to be created at the start of Slice 2 (kept in research for now — no plugin product files until implementation kicks off). Round-trip-via-`fab` deploy test deferred to Slice 3 (needs Fabric; user is staying offline for now).
 - **Slice 1 — Toggle plumbing.** `userConfig.notebook_engine` + `--engine` flag + Section 0 + `project-config.yml` field. *Test:* orchestrator records engine; default stays `pyspark`; PySpark path byte-for-byte unchanged.
 - **Slice 2 — Python reference set + utilities notebook.** `python-style-guide.md`, `python-delta-patterns.md`, Python `nb_utils_config` (incl. `table_path()` resolver). *Test:* utilities notebook is valid `.ipynb`, helpers importable via `%run` shape.
 - **Slice 3 — Python bronze builder path.** `engine=python` emits a polars+delta-rs bronze notebook. *Test:* output is valid Python-kernel `.ipynb`, append + `schema_mode="merge"`, metadata cols present, passes engine-aware hook + validator.

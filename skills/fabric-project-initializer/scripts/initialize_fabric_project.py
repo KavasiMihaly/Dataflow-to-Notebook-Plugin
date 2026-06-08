@@ -248,6 +248,7 @@ project:
   name: "{config["display_name"]}"
   description: "{config["description"]}"
   type: "fabric"
+  engine: "{config["engine"]}"
   created: "{datetime.now().strftime('%Y-%m-%d')}"
 
 fabric:
@@ -533,6 +534,14 @@ def main():
         help="Gold lakehouse name (default: lh_gold)"
     )
     parser.add_argument(
+        "--engine",
+        type=str,
+        choices=["pyspark", "python"],
+        default="pyspark",
+        help="Notebook compute engine: 'pyspark' (default, Spark cluster) or "
+             "'python' (single-node polars/duckdb/delta-rs). One engine per project."
+    )
+    parser.add_argument(
         "--description",
         type=str,
         help="Project description"
@@ -577,6 +586,7 @@ def main():
         "silver_lakehouse": args.silver_lakehouse,
         "gold_lakehouse": args.gold_lakehouse,
         "description": args.description,
+        "engine": args.engine,
     }
 
     print()
@@ -587,6 +597,7 @@ def main():
     print(f"  Bronze Lakehouse: {config['bronze_lakehouse']}")
     print(f"  Silver Lakehouse: {config['silver_lakehouse']}")
     print(f"  Gold Lakehouse: {config['gold_lakehouse']}")
+    print(f"  Notebook Engine: {config['engine']}")
     print(f"  Description: {config['description']}")
     print()
 

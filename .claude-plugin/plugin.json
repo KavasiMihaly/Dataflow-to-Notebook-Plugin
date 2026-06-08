@@ -93,6 +93,12 @@
       "type": "string",
       "sensitive": false
     },
+    "notebook_engine": {
+      "title": "Notebook Engine",
+      "description": "Compute engine for generated notebooks: 'pyspark' (default) emits Spark-cluster notebooks (synapse_pyspark kernel) for larger/distributed workloads; 'python' emits single-node notebooks (jupyter kernel, polars/duckdb/delta-rs) for low-volume workloads. One engine per migration. See the decision matrix in the README.",
+      "type": "string",
+      "sensitive": false
+    },
     "azure_tenant_id": {
       "title": "Azure Tenant ID",
       "description": "Azure Entra ID tenant ID. Required for service principal auth; leave empty for interactive auth.",
