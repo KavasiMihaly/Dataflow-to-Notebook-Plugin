@@ -77,6 +77,25 @@ def _code_source(nb: dict) -> str:
     return "\n".join(parts)
 
 
+def _write_mode_resolves_to(src: str, expected: str) -> bool:
+    """True if a write call's `mode=` resolves to `expected` ("append"/"overwrite").
+
+    Accepts BOTH the literal form (`mode="append"`) and the parameterised form
+    the real builders emit (`mode=load_mode` where `load_mode = "append"` is
+    assigned earlier). IMP-2: a literal-only assertion gives false confidence
+    because builders legitimately parameterise the write mode.
+    """
+    # Literal: mode="append"  (lookbehind so `schema_mode="..."` never matches)
+    if re.search(rf'(?<![A-Za-z_])mode\s*=\s*["\']{re.escape(expected)}["\']', src):
+        return True
+    # Variable: mode=<identifier> where <identifier> = "append" somewhere.
+    for m in re.finditer(r'(?<![A-Za-z_])mode\s*=\s*([A-Za-z_]\w*)', src):
+        ident = m.group(1)
+        if re.search(rf'{re.escape(ident)}\s*=\s*["\']{re.escape(expected)}["\']', src):
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # Test 1 — valid jupyter-kernel .ipynb
 # --------------------------------------------------------------------------- #
@@ -135,13 +154,47 @@ def test_bronze_python_append_schema_merge() -> None:
         return
     src = _code_source(_load_ipynb(PY_BRONZE))
     has_write = "write_deltalake" in src
-    has_append = re.search(r'mode\s*=\s*["\']append["\']', src) is not None
+    has_append = _write_mode_resolves_to(src, "append")
     has_merge = re.search(r'schema_mode\s*=\s*["\']merge["\']', src) is not None
     _check(
         "Python bronze write uses write_deltalake + mode=append + schema_mode=merge",
         has_write and has_append and has_merge,
         detail=f"write_deltalake={has_write} append={has_append} merge={has_merge}",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Test 3b — append via a variable (IMP-2): real builders parameterise mode
+# --------------------------------------------------------------------------- #
+def test_bronze_python_append_via_variable() -> None:
+    """The write-idiom check must PASS when the write mode is parameterised
+    (`mode=load_mode` with `load_mode = "append"`) — the form the real
+    fabric-bronze-builder emitted in the 2026-06-08 integration pass — not only
+    the inline literal. Regression for IMP-2 (brittle literal-only gate)."""
+    variable_form = (
+        'load_mode = "append"\n'
+        'write_deltalake(\n'
+        '    table_path(target_table),\n'
+        '    df.to_arrow(),\n'
+        '    mode=load_mode,\n'
+        '    schema_mode="merge",\n'
+        ')\n'
+    )
+    literal_form = 'write_deltalake(table_path(t), a, mode="append", schema_mode="merge")'
+    # An overwrite must NOT be mistaken for append (guards the loosened matcher).
+    overwrite_form = (
+        'load_mode = "overwrite"\n'
+        'write_deltalake(table_path(t), a, mode=load_mode, schema_mode="overwrite")'
+    )
+    _check("write-idiom check accepts mode=load_mode (variable append)",
+           _write_mode_resolves_to(variable_form, "append"),
+           detail="parameterised append rejected")
+    _check("write-idiom check still accepts literal mode=\"append\"",
+           _write_mode_resolves_to(literal_form, "append"),
+           detail="literal append rejected")
+    _check("write-idiom check does not treat overwrite as append",
+           not _write_mode_resolves_to(overwrite_form, "append"),
+           detail="overwrite mis-detected as append")
 
 
 # --------------------------------------------------------------------------- #
@@ -288,6 +341,7 @@ def main() -> int:
     test_bronze_python_valid_ipynb()
     test_bronze_python_no_spark_idioms()
     test_bronze_python_append_schema_merge()
+    test_bronze_python_append_via_variable()
     test_bronze_python_metadata_columns()
     test_bronze_python_uses_table_path()
     test_bronze_python_passes_structure_hook()

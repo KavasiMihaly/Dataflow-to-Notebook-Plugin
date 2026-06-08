@@ -81,6 +81,24 @@ def _notebook_source(nb: dict) -> str:
     return "\n".join(parts)
 
 
+def _write_mode_resolves_to(src: str, expected: str) -> bool:
+    """True if a write call's `mode=` resolves to `expected` ("append"/"overwrite").
+
+    Accepts BOTH the literal form (`mode="overwrite"`) and the parameterised
+    form the real builders emit (`mode=write_mode` where `write_mode =
+    "overwrite"` is assigned earlier). IMP-2: a literal-only assertion gives
+    false confidence because builders legitimately parameterise the write mode.
+    The negative lookbehind keeps `schema_mode="..."` from matching.
+    """
+    if re.search(rf'(?<![A-Za-z_])mode\s*=\s*["\']{re.escape(expected)}["\']', src):
+        return True
+    for m in re.finditer(r'(?<![A-Za-z_])mode\s*=\s*([A-Za-z_]\w*)', src):
+        ident = m.group(1)
+        if re.search(rf'{re.escape(ident)}\s*=\s*["\']{re.escape(expected)}["\']', src):
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # 1. valid jupyter-kernel .ipynb + lh_silver binding
 # --------------------------------------------------------------------------- #
@@ -168,10 +186,12 @@ def test_silver_python_overwrite_schema() -> None:
         return
     src = _notebook_source(_load_ipynb(PY_SILVER_GOLDEN))
     uses_write_deltalake = bool(re.search(r"\bwrite_deltalake\s*\(", src))
-    overwrite_mode = bool(re.search(r"mode\s*=\s*['\"]overwrite['\"]", src))
+    # IMP-2: accept both literal mode="overwrite" and a parameterised
+    # mode=write_mode (write_mode = "overwrite").
+    overwrite_mode = _write_mode_resolves_to(src, "overwrite")
     schema_overwrite = bool(re.search(r"schema_mode\s*=\s*['\"]overwrite['\"]", src))
     # Must NOT be the bronze append idiom.
-    not_append = not re.search(r"mode\s*=\s*['\"]append['\"]", src)
+    not_append = not _write_mode_resolves_to(src, "append")
     _check(
         "Python silver write uses overwrite + schema_mode overwrite",
         uses_write_deltalake and overwrite_mode and schema_overwrite and not_append,

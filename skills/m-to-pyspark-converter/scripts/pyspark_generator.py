@@ -568,13 +568,13 @@ class PySparkGenerator:
         """Convert an M 'each' expression body to PySpark column expression."""
         expr = m_expr.strip()
 
-        # Handle if/then/else → F.when().otherwise()
-        if_match = re.match(r'if\s+(.+?)\s+then\s+(.+?)\s+else\s+(.+)', expr, re.DOTALL)
-        if if_match:
-            cond = self._convert_condition(if_match.group(1))
-            then_val = self._convert_value(if_match.group(2).strip())
-            else_val = self._convert_value(if_match.group(3).strip())
-            return f"F.when({cond}, {then_val}).otherwise({else_val})"
+        # Handle if/then/else (including nested `else if`) → chained
+        # F.when(c1, v1).when(c2, v2)...otherwise(e). A single-level if produces
+        # exactly F.when(c, v).otherwise(e) (unchanged from the original).
+        if re.match(r'if\s', expr):
+            chain = self._convert_if_chain(expr)
+            if chain:
+                return chain
 
         # Handle [Column] references
         col_match = re.match(r'^\[([^\]]+)\]$', expr)
@@ -615,6 +615,34 @@ class PySparkGenerator:
         # Fallback
         return f'F.expr("{self._escape_string(expr)}")  # TODO: Review expression'
 
+    def _convert_if_chain(self, expr: str) -> str:
+        """Convert a (possibly nested) M if/then/else into a chained PySpark
+        when expression: F.when(c1, v1).when(c2, v2)...otherwise(e).
+
+        Recurses on the `else` branch so nested `else if` becomes additional
+        .when() links rather than being dumped into a string literal (the IMP-1
+        SyntaxError). Returns "" if expr is not a well-formed if so the caller
+        can fall through to other handlers.
+        """
+        branches = []  # (cond, then) pairs
+        rest = expr.strip()
+        while True:
+            m = re.match(r'if\s+(.+?)\s+then\s+(.+?)\s+else\s+(.+)', rest, re.DOTALL)
+            if not m:
+                return ""
+            cond = self._convert_condition(m.group(1).strip())
+            then_val = self._convert_value(m.group(2).strip())
+            branches.append((cond, then_val))
+            rest = m.group(3).strip()
+            if not re.match(r'if\s', rest):
+                else_val = self._convert_value(rest)
+                break
+        chain = f"F.when({branches[0][0]}, {branches[0][1]})"
+        for cond, then_val in branches[1:]:
+            chain += f".when({cond}, {then_val})"
+        chain += f".otherwise({else_val})"
+        return chain
+
     def _convert_value(self, val: str) -> str:
         """Convert an M value to PySpark literal or column ref."""
         val = val.strip()
@@ -627,7 +655,10 @@ class PySparkGenerator:
         col_match = re.match(r'^\[([^\]]+)\]$', val)
         if col_match:
             return f'F.col("{col_match.group(1)}")'
-        return f'F.lit("{val}")'
+        # Fallback: embed as a string literal, escaping quotes/backslashes so an
+        # unexpected value can never break Python syntax (IMP-1 hardening).
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+        return f'F.lit("{escaped}")'
 
     def _convert_text_function(self, func: str, args: str) -> str:
         """Convert a Text.* function call."""

@@ -28,3 +28,6 @@ _Agent Logs/
 3 - Notebooks/
 1 - Documentation/
 2 - Source Files/
+
+# Throwaway integration-test scaffolds + verifier output
+_Test/

@@ -336,7 +336,10 @@ swap, validation) is identical, but the idioms are polars/delta-rs.
 ### Notebook metadata (Python kernel)
 
 Use the confirmed Python-kernel metadata block (see
-`reference/python-notebook-metadata.md`). The lakehouse binding is `lh_silver`:
+`reference/python-notebook-metadata.md`) — the canonical shell, **byte-identical**
+to the bronze builder's except the lakehouse binding (IMP-4: emit all four
+discriminator fields; never default `kernelspec.name` to `python3`). The lakehouse
+binding is `lh_silver`:
 
 ```json
 "metadata": {

@@ -36,6 +36,19 @@ META_REF = REF_DIR / "python-notebook-metadata.md"
 STYLE_REF = REF_DIR / "python-style-guide.md"
 DELTA_REF = REF_DIR / "python-delta-patterns.md"
 
+GOLDEN_DIR = ROOT / "tests" / "fixtures" / "golden"
+PY_BRONZE_GOLDEN = GOLDEN_DIR / "python" / "nb_bronze_customers.ipynb"
+PY_SILVER_GOLDEN = GOLDEN_DIR / "python" / "nb_silver_customers.ipynb"
+
+# The single canonical Python-notebook metadata shell (python-notebook-metadata.md
+# §"The discriminator"). Both builders MUST emit exactly this (IMP-4).
+CANONICAL_SHELL = {
+    "kernel_info.name": "jupyter",
+    "kernelspec.name": "jupyter",
+    "kernelspec.display_name": "Jupyter",
+    "microsoft.language_group": "jupyter_python",
+}
+
 REQUIRED_HELPERS = [
     "read_bronze",
     "add_bronze_metadata",
@@ -93,6 +106,45 @@ def test_python_metadata_reference_matches_confirmed() -> None:
         "python-notebook-metadata.md carries confirmed jupyter + jupyter_python",
         ok and has_kernel and has_group,
         detail=f"exists={ok} kernel={has_kernel} group={has_group}",
+    )
+
+
+def _metadata_shell(nb: dict) -> dict:
+    meta = nb.get("metadata", {})
+    return {
+        "kernel_info.name": meta.get("kernel_info", {}).get("name"),
+        "kernelspec.name": meta.get("kernelspec", {}).get("name"),
+        "kernelspec.display_name": meta.get("kernelspec", {}).get("display_name"),
+        "microsoft.language_group": meta.get("microsoft", {}).get("language_group"),
+    }
+
+
+def test_python_builders_agree_on_metadata_shell() -> None:
+    """IMP-4: bronze and silver Python notebooks must carry an IDENTICAL kernel
+    metadata shell (kernel_info.name, kernelspec.name/display_name,
+    microsoft.language_group), and it must equal the canonical block in
+    python-notebook-metadata.md. The integration pass found the real builders
+    diverging (bronze kernelspec.name="jupyter" vs silver "python3"); this pins
+    both goldens to one shell so a future drift fails here."""
+    if not PY_BRONZE_GOLDEN.is_file() or not PY_SILVER_GOLDEN.is_file():
+        _check("Python bronze & silver share the canonical metadata shell", False,
+               detail=f"bronze={PY_BRONZE_GOLDEN.is_file()} silver={PY_SILVER_GOLDEN.is_file()}")
+        return
+    bronze_shell = _metadata_shell(_load_ipynb(PY_BRONZE_GOLDEN))
+    silver_shell = _metadata_shell(_load_ipynb(PY_SILVER_GOLDEN))
+    utils_shell = _metadata_shell(_load_ipynb(PY_UTILS_TEMPLATE)) if PY_UTILS_TEMPLATE.is_file() else {}
+
+    identical = bronze_shell == silver_shell
+    matches_canonical = bronze_shell == CANONICAL_SHELL
+    utils_ok = (not utils_shell) or (
+        utils_shell["kernel_info.name"] == "jupyter"
+        and utils_shell["microsoft.language_group"] == "jupyter_python"
+    )
+    _check(
+        "Python bronze & silver share the canonical metadata shell",
+        identical and matches_canonical and utils_ok,
+        detail=f"bronze={bronze_shell} silver={silver_shell} "
+               f"canonical={CANONICAL_SHELL} utils={utils_shell}",
     )
 
 
@@ -229,6 +281,7 @@ def test_no_local_paths_in_refs() -> None:
 
 def main() -> int:
     test_python_metadata_reference_matches_confirmed()
+    test_python_builders_agree_on_metadata_shell()
     test_utils_notebook_valid_ipynb()
     test_utils_defines_required_helpers()
     test_table_path_schema_resolution()

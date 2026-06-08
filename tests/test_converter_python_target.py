@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.resolve()
@@ -38,6 +39,17 @@ from m_parser import MParser  # noqa: E402
 from pyspark_generator import PySparkGenerator  # noqa: E402
 
 FAILURES: list[str] = []
+
+# A 3-level nested M if/then/else (the Schools.Ofsted Rank shape from the
+# 2026-06-08 integration pass that exposed IMP-1).
+NESTED_IF_M = (
+    'let Source = X, '
+    'A = Table.AddColumn(Source, "Ofsted Rank", each '
+    'if [Ofsted Rating] = "Outstanding" then 1 '
+    'else if [Ofsted Rating] = "Good" then 2 '
+    'else if [Ofsted Rating] = "Requires improvement" then 3 '
+    'else null) in A'
+)
 
 
 def _check(name: str, condition: bool, detail: str = "") -> None:
@@ -218,6 +230,111 @@ def test_target_python_expressions() -> None:
             _check(f"expression: {label}", False, detail=f"raised {e!r}")
 
 
+# --- 4b. Nested if/then/else (IMP-1) -----------------------------------------
+
+def test_python_nested_if_chain_compiles() -> None:
+    """A multi-level M `if ... else if ... else` must emit a full chained
+    pl.when().then()...otherwise() expression — and the emitted code must
+    compile() (no SyntaxError from the else branch being dumped into a string
+    literal with unescaped quotes). Regression for IMP-1."""
+    try:
+        out = _gen_polars(NESTED_IF_M)
+    except Exception as e:  # noqa: BLE001
+        _check("polars nested-if: generates without crash", False, detail=f"raised {e!r}")
+        return
+
+    # The whole chain must be present: 3 conditions, 3 then-values, one otherwise.
+    needles = [
+        'pl.when((pl.col("Ofsted Rating") == "Outstanding")).then(pl.lit(1))',
+        '.when((pl.col("Ofsted Rating") == "Good")).then(pl.lit(2))',
+        '.when((pl.col("Ofsted Rating") == "Requires improvement")).then(pl.lit(3))',
+        '.otherwise(pl.lit(None))',
+    ]
+    missing = [n for n in needles if n not in out]
+    _check("polars nested-if: full when/then chain emitted", not missing,
+           detail=f"missing {missing!r} in:\n{out}")
+
+    # No leftover raw M ('then'/'else if') should survive into executable code.
+    leaked = any(
+        ("else if" in line or " then " in line)
+        for line in out.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    _check("polars nested-if: no raw M leaks into code", not leaked,
+           detail=f"raw M survived in:\n{out}")
+
+    try:
+        compile(out, "<nested-if-polars>", "exec")
+        _check("polars nested-if: emitted code compiles", True)
+    except SyntaxError as e:
+        _check("polars nested-if: emitted code compiles", False, detail=f"SyntaxError: {e}")
+
+
+def test_pyspark_nested_if_chain_compiles() -> None:
+    """The PySpark target must also chain F.when().when().otherwise() for a
+    nested M if/then/else and compile cleanly. Regression for IMP-1."""
+    try:
+        out = PySparkGenerator().generate(MParser().parse(NESTED_IF_M), "Schools", "Schools.tmdl")
+    except Exception as e:  # noqa: BLE001
+        _check("pyspark nested-if: generates without crash", False, detail=f"raised {e!r}")
+        return
+
+    needles = [
+        'F.when((F.col("Ofsted Rating") == "Outstanding"), F.lit(1))',
+        '.when((F.col("Ofsted Rating") == "Good"), F.lit(2))',
+        '.when((F.col("Ofsted Rating") == "Requires improvement"), F.lit(3))',
+        '.otherwise(F.lit(None))',
+    ]
+    missing = [n for n in needles if n not in out]
+    _check("pyspark nested-if: full when chain emitted", not missing,
+           detail=f"missing {missing!r} in:\n{out}")
+
+    try:
+        compile(out, "<nested-if-pyspark>", "exec")
+        _check("pyspark nested-if: emitted code compiles", True)
+    except SyntaxError as e:
+        _check("pyspark nested-if: emitted code compiles", False, detail=f"SyntaxError: {e}")
+
+
+# --- 4c. Layer-agnostic converter output (IMP-3) -----------------------------
+
+def test_python_converter_is_layer_agnostic() -> None:
+    """The converter is layer-agnostic — the bronze/silver builders set the
+    real layer write mode. Its raw output must NOT (a) title itself
+    `nb_bronze_*` or (b) silently hardcode a layer-specific write mode with no
+    marker. It MUST flag that the write mode is a builder-overridden default and
+    document where table_path() comes from. Regression for IMP-3."""
+    out = _gen_polars(
+        'let Source = Csv.Document(File.Contents("x.csv")), '
+        'F = Table.SelectRows(Source, each [n] > 0) in F',
+        table_name="Schools",
+    )
+    lines = out.splitlines()
+
+    # (a) No bronze-specific notebook title.
+    no_bronze_title = not any(l.strip().startswith("# Notebook: nb_bronze_") for l in lines)
+    _check("converter header is layer-neutral (no nb_bronze_ title)",
+           no_bronze_title, detail=f"found a nb_bronze_ title in:\n{out}")
+
+    # (b) The write mode is explicitly marked as builder-overridden, not a silent
+    #     hardcoded layer choice.
+    has_marker = ("builder sets" in out) or ("layer write mode" in out)
+    _check("converter marks the write mode as builder-overridden",
+           has_marker, detail=f"no builder-override marker near write in:\n{out}")
+
+    # (c) table_path() provenance documented (comes from the utilities notebook).
+    documents_table_path = "nb_utils_config" in out or "%run" in out
+    _check("converter documents table_path() provenance (%run utilities)",
+           documents_table_path, detail=f"no table_path provenance note in:\n{out}")
+
+    # Still syntactically valid.
+    try:
+        compile(out, "<layer-agnostic>", "exec")
+        _check("layer-agnostic converter output compiles", True)
+    except SyntaxError as e:
+        _check("layer-agnostic converter output compiles", False, detail=f"SyntaxError: {e}")
+
+
 # --- 5. Unknown -> TODO (no crash) -------------------------------------------
 
 def test_target_python_unknown_emits_todo() -> None:
@@ -240,6 +357,37 @@ def test_cli_rejects_unknown_target() -> None:
     )
     _check("--target ruby rejected with non-zero exit", proc.returncode != 0,
            detail=f"rc={proc.returncode} (expected non-zero)")
+
+
+# --- 6b. --output is a FILE path, not a directory (IMP-5) --------------------
+
+def test_cli_output_writes_exact_file() -> None:
+    """`--output some/dir/out.py` must write exactly out.py (a file), not a
+    directory named out.py containing nb_<query>.py. Regression for IMP-5 (the
+    path was previously consumed by --output-dir via argparse prefix matching)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "nested" / "out.py"
+        proc = subprocess.run(
+            [sys.executable, str(CLI),
+             "--m-code", "let Source = X in Source",
+             "--target", "python",
+             "--output", str(out_path)],
+            capture_output=True, text=True, cwd=str(ROOT),
+        )
+        ok = (
+            proc.returncode == 0
+            and out_path.is_file()
+            and not out_path.is_dir()
+        )
+        _check("--output writes exactly the named .py file",
+               ok,
+               detail=f"rc={proc.returncode} is_file={out_path.is_file()} "
+                      f"is_dir={out_path.is_dir()} stderr={proc.stderr[-200:]}")
+        if out_path.is_file():
+            content = out_path.read_text(encoding="utf-8")
+            _check("--output file holds the converted code",
+                   "import polars as pl" in content,
+                   detail="converted polars code not found in output file")
 
 
 # --- bonus: security parity (no connection strings leak on python target) ----
@@ -268,8 +416,12 @@ def main() -> int:
     test_target_python_table_ops()
     test_target_python_type_map()
     test_target_python_expressions()
+    test_python_nested_if_chain_compiles()
+    test_pyspark_nested_if_chain_compiles()
+    test_python_converter_is_layer_agnostic()
     test_target_python_unknown_emits_todo()
     test_cli_rejects_unknown_target()
+    test_cli_output_writes_exact_file()
     test_python_target_strips_connection_strings()
 
     print()

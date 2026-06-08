@@ -189,12 +189,32 @@ When `engine=python`, emit a **single-node polars + delta-rs** notebook on the
 contract is unchanged (append-only, three metadata columns, schema merge,
 row-count validation); only the codegen idiom differs.
 
-**Kernel / metadata (copy verbatim from `python-notebook-metadata.md`):** the
-discriminator is BOTH `metadata.kernel_info.name == "jupyter"` AND
-`metadata.microsoft.language_group == "jupyter_python"` — set both. Keep the
-`dependencies.lakehouse` binding shape identical to PySpark and bind the **bronze**
-lakehouse. Mirror Fabric's full export (keep the harmless `spark_compute` +
-`nteract` residue). `nbformat: 4`, `nbformat_minor: 5`.
+**Kernel / metadata (copy this block verbatim — it is the canonical shell from
+`reference/python-notebook-metadata.md`; silver emits the same block bound to
+`lh_silver`).** Emit ALL four discriminator fields, not just two — `kernel_info`,
+`kernelspec`, `language_info`, and `microsoft` — so the bronze and silver shells
+are byte-identical (IMP-4: do NOT default `kernelspec.name` to `python3`):
+
+```json
+"metadata": {
+  "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.11"},
+  "kernelspec": {"name": "jupyter", "display_name": "Jupyter"},
+  "language_info": {"name": "python"},
+  "microsoft": {"language": "python", "language_group": "jupyter_python"},
+  "dependencies": {
+    "lakehouse": {
+      "known_lakehouses": [{"id": "<bronze-lakehouse-id>"}],
+      "default_lakehouse": "<bronze-lakehouse-id>",
+      "default_lakehouse_name": "<bronze-lakehouse-name>",
+      "default_lakehouse_workspace_id": "<workspace-id>"
+    }
+  }
+}
+```
+
+Bind the **bronze** lakehouse. `nbformat: 4`, `nbformat_minor: 5`. NO `synapse_pyspark`
+kernel; NO real GUIDs (use the readable placeholders, bound at deploy time). Mirror
+Fabric's full export — the harmless `spark_compute` + `nteract` residue may be kept.
 
 **Forbidden in Python output:** no `spark.read`, no `F.` alias, no `saveAsTable`,
 no `import pyspark` / `from pyspark`, no `.withColumn(...)`. There is no `F` and no

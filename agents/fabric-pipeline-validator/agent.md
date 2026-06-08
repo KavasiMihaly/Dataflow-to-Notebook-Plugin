@@ -80,7 +80,7 @@ Read the .ipynb file. Confirm:
 **Bronze notebooks (`nb_bronze_*.ipynb`):**
 - Lakehouse binding is `lh_bronze` (or whatever the bronze lakehouse name is from Section 0)
 - Has the standard 6-cell structure (Header / Parameters / Imports / Read Source / Add Metadata / Write Delta / Validation) — flexible on order, but all six must be present
-- Write mode is `append` (`.mode("append")` + `.saveAsTable(...)`)
+- Write mode resolves to `append` (`.mode("append")` + `.saveAsTable(...)`). **Accept a parameterised mode** — `.mode(load_mode)` with `load_mode = "append"` assigned earlier is the builder's normal form; resolve the variable before judging.
 - `mergeSchema: true`
 - Calls `add_bronze_metadata()` or equivalent inline metadata addition
 
@@ -93,7 +93,7 @@ Read the .ipynb file. Confirm:
   - `abfss://`, `wasbs://`
   - `Files/`
   Any match → FAIL (silver contract violation)
-- Write mode is `overwrite` (`.mode("overwrite")` + `.saveAsTable(...)`)
+- Write mode resolves to `overwrite` (`.mode("overwrite")` + `.saveAsTable(...)`). **Accept a parameterised mode** — `.mode(write_mode)` with `write_mode = "overwrite"` assigned earlier is fine; resolve the variable before judging.
 - `overwriteSchema: true`
 - Calls `add_silver_metadata()` or equivalent
 - **Leak guard:** NO Python-engine idioms — `write_deltalake(`, `import polars`, `pl.read_*` → FAIL (PySpark notebook running single-node delta-rs).
@@ -102,7 +102,7 @@ Read the .ipynb file. Confirm:
 
 **Bronze notebooks (`nb_bronze_*.ipynb`):**
 - Lakehouse binding is `lh_bronze`
-- Write idiom is **delta-rs append**: `write_deltalake(table_path(...), <arrow>, mode="append", schema_mode="merge")`. The write target MUST go through `table_path(...)` (no hard-coded `Tables/...`). → FAIL if `mode="append"` or `schema_mode="merge"` is absent, or `saveAsTable` is used.
+- Write idiom is **delta-rs append**: `write_deltalake(table_path(...), <arrow>, mode="append", schema_mode="merge")`. The write target MUST go through `table_path(...)` (no hard-coded `Tables/...`). → FAIL if the write mode does not resolve to `append`, or `schema_mode="merge"` is absent, or `saveAsTable` is used. **Accept a parameterised mode** — builders legitimately write `mode=load_mode` where `load_mode = "append"` is assigned earlier; resolve the variable before judging (only a mode resolving to `overwrite` or something other than `append` is a FAIL).
 - Metadata columns added — `_load_timestamp` (UTC), `_source_file`, `_load_id` — via `add_bronze_metadata()` or the inline `pl.lit(...)` idiom.
 - Bronze MAY read source files (`pl.read_csv/parquet`, `glob` of the `/lakehouse/default/Files/...` mount) — bronze is the read layer.
 - **Leak guard:** NO Spark idioms — `spark.`, `F.col`/`F.`, `import pyspark`, `.saveAsTable(`, `.withColumnRenamed(` → FAIL (no Spark session in a single-node Python notebook).
@@ -116,7 +116,7 @@ Read the .ipynb file. Confirm:
   - `pd.read_*`
   - `abfss://`, `wasbs://`, `Files/`
   Any match → FAIL (silver contract violation). A `read_bronze(` call MUST be present.
-- Write idiom is **delta-rs overwrite**: `write_deltalake(table_path(...), <arrow>, mode="overwrite", schema_mode="overwrite")`. → FAIL if `mode="overwrite"` or `schema_mode="overwrite"` is absent, or `saveAsTable` is used.
+- Write idiom is **delta-rs overwrite**: `write_deltalake(table_path(...), <arrow>, mode="overwrite", schema_mode="overwrite")`. → FAIL if the write mode does not resolve to `overwrite`, or `schema_mode="overwrite"` is absent, or `saveAsTable` is used. **Accept a parameterised mode** — `mode=write_mode` with `write_mode = "overwrite"` assigned earlier is fine; resolve the variable before judging.
 - Drops bronze metadata + calls `add_silver_metadata()` or equivalent.
 - **Leak guard:** NO Spark idioms (as above) → FAIL.
 

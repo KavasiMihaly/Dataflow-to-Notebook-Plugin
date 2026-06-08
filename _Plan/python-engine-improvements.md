@@ -1,6 +1,6 @@
 # Plan: Python-engine improvements (post-integration findings)
 
-**Status:** Backlog — ready for a fresh session
+**Status:** IMP-1..IMP-5 ✅ DONE (2026-06-08). IMP-6 outstanding — design decision, **grill before coding** (changes the bronze contract).
 **Created:** 2026-06-08
 **Parent epic:** Python engine (`_Plan/python-notebook-engine.md` — Slices 0–7 complete)
 **Source:** the offline integration pass run 2026-06-08 (real `fabric-bronze-builder` + `fabric-silver-builder` on bundled `Sample Education Data`, `engine=python`). See `_Plan/python-notebook-engine.md` § "Integration pass — RAN 2026-06-08".
@@ -33,7 +33,11 @@ Run from the repo root. Produces a throwaway scaffold under `_Test/py-integratio
 
 ## Work items (priority order)
 
-### IMP-1 — Converter nested `if/then/else` emits invalid Python  **[High]**
+### IMP-1 — Converter nested `if/then/else` emits invalid Python  **[High]** — ✅ DONE (2026-06-08)
+
+**Resolution:** added `_convert_if_chain()` to both `polars_generator.py` and `pyspark_generator.py` — it iterates over nested `else if`, emitting a full `.when().then()...otherwise()` chain (polars) / `F.when(c, v).when(...).otherwise(e)` chain (PySpark). Hardened both `_convert_value()` fallbacks to escape quotes/backslashes so no value can break Python syntax. Single-level `if` output is byte-identical to before (PySpark path intact). Regression tests added (`test_python_nested_if_chain_compiles`, `test_pyspark_nested_if_chain_compiles`) asserting the full chain + `compile()`. Verified end-to-end on the bundled `Schools.pq` → raw output now `compile()`s.
+
+
 
 **Problem:** `polars_generator` converts only the first condition of a nested M `if/then/else`. The remainder is dumped into `pl.lit("…")` with **unescaped double quotes** → a Python `SyntaxError`.
 
@@ -53,28 +57,44 @@ pl.when(pl.col("Ofsted Rating")=="Outstanding").then(pl.lit(1))
 **Files:** `skills/m-to-pyspark-converter/scripts/polars_generator.py`, possibly `pyspark_generator.py`, `function_map.py`.
 **Tests (write first):** extend `tests/test_converter_python_target.py` — a 3-level nested-if case asserting the full `.when().then()` chain AND that the emitted cell `compile()`s (no SyntaxError). Add the equivalent PySpark-target case if that emitter is also fixed.
 
-### IMP-2 — Gate/validator asserts literal `mode="append"`; real builders use a variable  **[Med]**
+### IMP-2 — Gate/validator asserts literal `mode="append"`; real builders use a variable  **[Med]** — ✅ DONE (2026-06-08)
+
+**Resolution:** added a `_write_mode_resolves_to(src, expected)` helper to `test_bronze_python.py` and `test_silver_python.py` — accepts both the literal (`mode="append"`) and parameterised (`mode=load_mode` with `load_mode = "append"`) forms; a negative lookbehind keeps `schema_mode="..."` from matching. New test `test_bronze_python_append_via_variable` covers the variable append + guards that overwrite is not mis-read as append. Loosened the validator `agent.md` wording (Python bronze/silver + PySpark bronze/silver) to "resolve the variable before judging — only a non-matching mode is a FAIL." Silver bronze-only contract left untouched/unweakened.
+
+
 
 **Problem:** the Slice-6 validator wording + the bronze golden assert the literal `mode="append"`. The real builder emitted `mode=load_mode` where `load_mode="append"` — functionally correct, but a literal-string assertion misses it. Brittle gate = false confidence.
 **Fix:** loosen the validator/test to accept `mode=<identifier>` resolving to append/overwrite (or a regex `mode\s*=\s*("append"|append|load_mode|write_mode)`), OR standardise builders to emit the literal. Prefer accepting both — builders legitimately parameterise.
 **Files:** `agents/fabric-pipeline-validator/agent.md`, `tests/test_bronze_python.py` (and any gate test asserting the literal).
 **Tests (write first):** a bronze fixture using `mode=load_mode` (with `load_mode="append"`) must PASS the write-idiom check.
 
-### IMP-3 — Converter mislabels layer + hardcodes `overwrite`  **[Med]**
+### IMP-3 — Converter mislabels layer + hardcodes `overwrite`  **[Med]** — ✅ DONE (2026-06-08)
+
+**Resolution (polars target only — PySpark emitter untouched to keep it byte-for-byte):** `polars_generator.py` header is now layer-neutral (`# Converted query: <name>`, no `nb_bronze_` title) and documents that `table_path()`/`read_bronze()` come from `%run utilities/nb_utils_config`. The write block emits `write_mode`/`schema_write_mode` variables defaulting to overwrite, with a clear `# TODO: builder sets layer write mode` marker, so it stays runnable AND flags that the bronze/silver builder overrides it. New test `test_python_converter_is_layer_agnostic`.
+
+
 
 **Problem:** converter output is titled `nb_bronze_*` yet emits `mode="overwrite"` and calls `table_path()` without defining/importing it — misleading as a standalone snippet (builders override correctly).
 **Fix:** the converter is layer-agnostic — drop the `nb_bronze_`/`write_deltalake(... overwrite ...)` assumptions from the emitter, or make the write idiom a clearly-marked `# TODO: builder sets layer write mode` placeholder. Keep `table_path()` usage but add a header comment that it comes from `%run utilities/nb_utils_config`.
 **Files:** `skills/m-to-pyspark-converter/scripts/polars_generator.py`.
 **Tests (write first):** assert the converter does not hardcode a layer-specific write mode (or emits the documented placeholder).
 
-### IMP-4 — Builders disagree on notebook metadata shell  **[Low]**
+### IMP-4 — Builders disagree on notebook metadata shell  **[Low]** — ✅ DONE (2026-06-08)
+
+**Resolution:** the bronze `agent.md` previously described the Python metadata in prose (only the two discriminator fields); replaced with the explicit canonical JSON block (all four fields: `kernel_info`, `kernelspec`, `language_info`, `microsoft`) bound to the bronze lakehouse — byte-identical to silver's block except the binding. Silver `agent.md` annotated to match. New regression test `test_python_builders_agree_on_metadata_shell` pins both Python goldens (+ utils template) to one `CANONICAL_SHELL` (`kernel_info.name`/`kernelspec.name`=jupyter, `display_name`=Jupyter, `language_group`=jupyter_python). The open `spark_compute`/`nteract` deploy micro-question still rides with the deferred live-Fabric round-trip.
+
+
 
 **Problem:** bronze builder wrote `kernelspec.name="jupyter"`; silver wrote `kernelspec.name="python3"` (both carry the correct `microsoft.language_group: "jupyter_python"`). Inconsistent shells risk deploy surprises.
 **Fix:** point both builder `agent.md`s at the single canonical block in `reference/python-notebook-metadata.md` (the Slice-0 confirmed export) and state it verbatim. Resolve the open micro-question "does omitting `spark_compute`/`nteract` affect deploy?" during the live-Fabric round-trip.
 **Files:** `agents/fabric-bronze-builder/agent.md`, `agents/fabric-silver-builder/agent.md`, `reference/python-notebook-metadata.md`.
 **Tests (write first):** a structural test (or extend `test_bronze_python`/`test_silver_python`) asserting both engines' goldens carry identical `kernelspec` + `microsoft.language_group`.
 
-### IMP-5 — Converter `--output FILE` mishandles the path  **[Low]**
+### IMP-5 — Converter `--output FILE` mishandles the path  **[Low]** — ✅ DONE (2026-06-08)
+
+**Root cause:** there was no `--output` flag — argparse prefix-matched `--output` onto `--output-dir`, so the file path became a directory. **Resolution:** added an explicit `--output FILE` argument + `write_output_file()` helper (writes the exact path, creates parent dirs) wired into the single-query handlers (`--m-file`, `--m-code`, single-table `--tmdl-file`). Guarded against `--output` with multi-table `--tmdl-path`/multi-partition `--tmdl-file` (errors, points to `--output-dir`). New test `test_cli_output_writes_exact_file`.
+
+
 
 **Problem:** `convert_m_to_pyspark.py --output <file>` treats the path as a directory (wrote `<file>\nb_*.py`).
 **Fix:** honour `--output` as a file path when it has a `.py` suffix / parent dir exists; only treat as a dir when it is one.

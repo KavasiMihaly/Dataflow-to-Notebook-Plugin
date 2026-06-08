@@ -1,8 +1,8 @@
 # Fabric Dataflow Migration Toolkit
 
-> End-to-end Power BI Dataflow Gen1 → Microsoft Fabric medallion notebook migration. Export Gen1 dataflows, analyze M code, generate bronze + silver PySpark notebooks, deploy to Fabric, and validate — in one Claude Code session.
+> End-to-end Power BI Dataflow Gen1 → Microsoft Fabric medallion notebook migration. Export Gen1 dataflows, analyze M code, generate bronze + silver notebooks — **distributed PySpark or single-node Python (polars/delta-rs)** — deploy to Fabric, and validate, in one Claude Code session.
 
-A Claude Code plugin that automates the full Gen1-to-Fabric migration workflow: extract dataflow definitions from a Power BI workspace, analyze every M query for conversion risks, scaffold a medallion lakehouse project, generate `.ipynb` notebooks for bronze and silver layers, deploy via the Fabric CLI, and produce a validation report. Ships with bundled sample dataflows and `--dry-run` support so you can try the full pipeline without a Fabric workspace.
+A Claude Code plugin that automates the full Gen1-to-Fabric migration workflow: extract dataflow definitions from a Power BI workspace, analyze every M query for conversion risks, scaffold a medallion lakehouse project, generate `.ipynb` notebooks for the bronze and silver layers on your chosen compute engine, deploy via the Fabric CLI, and produce a validation report. Pick **PySpark** (`synapse_pyspark` kernel) for distributed workloads or **Python** (`jupyter` kernel, polars/duckdb/delta-rs) for low-volume single-node workloads — one engine per migration. Ships with bundled sample dataflows and `--dry-run` support so you can try the full pipeline without a Fabric workspace.
 
 ---
 
@@ -16,7 +16,7 @@ A Claude Code plugin that automates the full Gen1-to-Fabric migration workflow: 
 - **Run against `--sample --dry-run` first**, then a non-production workspace, then a staging workspace, before any production migration.
 - **Validate row counts, schemas, and business logic** against the original Dataflow Gen1 outputs. The plugin's validator checks structural shape and basic non-zero rows; it does not verify business correctness.
 - **Test refresh schedules and downstream dependencies** (semantic models, reports) before decommissioning the source dataflows.
-- **Treat the bundled risk catalog (12+ patterns) as a starting point**, not a guarantee. Unknown M patterns are auto-tracked in `_Documentation/conversion-backlog.md` for follow-up.
+- **Treat the bundled risk catalog (30 patterns) as a starting point**, not a guarantee. Unknown M patterns are auto-tracked in `_Documentation/conversion-backlog.md` for follow-up.
 
 The plugin is suitable for: learning the migration pattern, demonstrating agentic data engineering, prototyping Fabric medallion projects, accelerating manual migrations with a strong human-review loop. It is not suitable for unattended production cutover.
 
@@ -24,19 +24,20 @@ The plugin is suitable for: learning the migration pattern, demonstrating agenti
 
 ## Why this plugin
 
-Microsoft [marked Dataflow Gen1 as Legacy in April 2026](https://powerbi.microsoft.com/en-us/blog/dataflows-thank-you-for-eight-years-of-gen1-and-why-gen2-is-the-future/). The official migration paths target **Dataflow Gen2** — but if your target architecture is **Fabric medallion lakehouses + PySpark notebooks** (the recommended pattern for new Fabric workloads), there is no first-party migration path. This plugin fills that gap.
+Microsoft [marked Dataflow Gen1 as Legacy in April 2026](https://powerbi.microsoft.com/en-us/blog/dataflows-thank-you-for-eight-years-of-gen1-and-why-gen2-is-the-future/). The official migration paths target **Dataflow Gen2** — but if your target architecture is **Fabric medallion lakehouses + notebooks** (the recommended pattern for new Fabric workloads), there is no first-party migration path. This plugin fills that gap, and lets you choose the compute engine per migration: **PySpark** for distributed workloads or **single-node Python** (polars/duckdb/delta-rs) for low-volume ones where spinning up a Spark cluster is overkill.
 
 ---
 
 ## Features
 
-- **6 Agents** — orchestrator, mechanical M analyst, interactive migration analyst, bronze + silver builders, end-to-end validator
-- **9 Skills** — Dataflow Gen1 extractor, M-to-PySpark converter, Fabric CLI runner, lakehouse reader, project initializer, data profiler, notebook deployer, pre-flight check, **opt-in pattern-sharing reporter**
-- **3 Hooks** — Bash auto-approval for plugin scripts, structural validation, session-start config check
+- **Dual compute engine** — generate bronze/silver notebooks as distributed **PySpark** (`synapse_pyspark` kernel) or single-node **Python** (`jupyter` kernel, polars/duckdb/delta-rs); chosen once per migration via the `notebook_engine` config or `--engine` flag, with an engine-aware validator and structure hook enforcing the right idioms on each path
+- **6 Agents** — orchestrator, mechanical M analyst, interactive migration analyst, engine-aware bronze + silver builders, end-to-end validator
+- **9 Skills** — Dataflow Gen1 extractor, M converter (PySpark **or** Python target), Fabric CLI runner, lakehouse reader, project initializer, data profiler, notebook deployer, pre-flight check, **opt-in pattern-sharing reporter**
+- **3 Hooks** — Bash auto-approval for plugin scripts, engine-aware structural validation, session-start config check
 - **Orchestrator-as-main-agent launch** — single `claude --agent ...` invocation drives the full 13-stage pipeline
 - **Dry-run mode** — full pipeline without Fabric access, using bundled sample dataflows
-- **12 documented M-conversion risk patterns** — best-effort PySpark output with explicit human-review markers
-- **Reference materials** — PySpark style guide, notebook templates, Delta Lake patterns, M-to-PySpark mapping, risk catalog
+- **30 documented M-conversion risk patterns** — best-effort notebook output with explicit human-review markers
+- **Reference materials** — per-engine style guides, notebook templates, Delta Lake patterns, M-to-PySpark/polars mappings, risk catalog
 
 ---
 
@@ -293,7 +294,7 @@ claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:f
 | Skill | Purpose |
 |---|---|
 | `dataflow-gen1-extractor` | Generate PowerShell + parse JSON exports |
-| `m-to-pyspark-converter` | Convert M queries to PySpark drafts |
+| `m-to-pyspark-converter` | Convert M queries to PySpark **or** Python (polars) drafts (`--target`) |
 | `fabric-cli-runner` | Execute `fab` CLI commands |
 | `fabric-lakehouse-reader` | Query lakehouse SQL endpoints |
 | `fabric-project-initializer` | Scaffold project folders + config |
@@ -317,7 +318,7 @@ claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:f
 agents/                          # 6 plugin agents
 skills/                          # 8 plugin skills
 hooks/                           # 5 hook scripts
-reference/                       # PySpark style guide, M conversion catalog, notebook templates
+reference/                       # Per-engine style guides (PySpark + Python), M conversion catalog, notebook templates
 examples/
   ├── sample-dataflows/          # Bundled Gen1 JSON exports for --sample mode
   └── quickstart.md
@@ -421,6 +422,26 @@ After editing agents/skills/hooks, run `/reload-plugins`.
 ## Changelog
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Pre-1.0 versions are pre-stable — minor bumps may include behavioral changes.
+
+### [0.6.0] — 2026-06-08
+
+Minor bump — Python-engine post-integration fixes (IMP-1..IMP-5). An offline integration pass (real bronze/silver builders + converter on the bundled `Sample Education Data`, `engine=python`) surfaced six gaps between the unit goldens and messy real M. Five are fixed here; the sixth (join-in-bronze vs join-in-silver) is a design decision deferred for a grilling session. The **PySpark path is byte-for-byte unchanged**; all offline suites + the pre-shipment audit are green.
+
+#### Fixed
+- **IMP-1 — converter nested `if/then/else` emitted invalid Python (both targets).** `polars_generator.py` and `pyspark_generator.py` only converted the first condition; the rest of a nested `else if` chain was dumped into a `pl.lit("…")`/`F.lit("…")` with unescaped quotes → `SyntaxError`. Added `_convert_if_chain()` to both emitters — it walks the nested `else` and produces a full chained `pl.when().then()...otherwise()` / `F.when(c, v).when(...).otherwise(e)`. Hardened both `_convert_value()` fallbacks to escape quotes/backslashes so no value can ever break Python syntax. Single-level `if` output is unchanged.
+- **IMP-5 — converter `--output FILE` was treated as a directory.** There was no `--output` flag, so argparse prefix-matched it onto `--output-dir` and created a directory. Added an explicit `--output FILE` argument (+ `write_output_file()` helper) for single-query conversions (`--m-file`/`--m-code`/single-table `--tmdl-file`); guarded against multi-table misuse.
+
+#### Changed
+- **IMP-2 — write-mode gates no longer assume a string literal.** The Slice-6 validator wording and the bronze/silver write-idiom tests asserted the literal `mode="append"`/`mode="overwrite"`; real builders legitimately parameterise as `mode=load_mode` (with `load_mode = "append"`). Loosened `agents/fabric-pipeline-validator/agent.md` (Python + PySpark, bronze + silver) to "resolve the variable before judging — only a non-matching mode is a FAIL," and added a `_write_mode_resolves_to()` matcher to the tests that accepts both forms (negative lookbehind keeps `schema_mode` out). The silver bronze-only read contract is untouched.
+- **IMP-3 — M→polars converter output is now layer-agnostic.** Its header no longer titles itself `nb_bronze_*` and no longer silently hardcodes `mode="overwrite"`. It documents that `table_path()`/`read_bronze()` come from `%run utilities/nb_utils_config`, and emits `write_mode`/`schema_write_mode` variables with a `# TODO: builder sets layer write mode` marker (the bronze/silver builder overrides them). PySpark emitter untouched.
+- **IMP-4 — bronze & silver builders now share one canonical notebook metadata shell.** The bronze `agent.md` described the Python metadata only in prose (two discriminator fields), which let a real run default `kernelspec.name` inconsistently. Replaced with the explicit four-field canonical block from `reference/python-notebook-metadata.md` (byte-identical to silver except the lakehouse binding); annotated silver to match.
+
+#### Added
+- **Regression tests (TDD):** 3-level nested-`if` chain + `compile()` on both targets (`tests/test_converter_python_target.py`), `--output` exact-file test, layer-agnostic converter test, parameterised-write-mode tests in `test_bronze_python.py`/`test_silver_python.py`, and `test_python_builders_agree_on_metadata_shell` pinning both Python goldens + the utils template to one shell (`test_python_reference_set.py`).
+
+#### Notes
+- **Verified end-to-end:** re-ran the integration pass — the real bronze + silver builders (following the updated `agent.md`s) produced compile-clean notebooks with an identical canonical metadata shell, correct append/overwrite writes, the chained `Ofsted Rank` `when/then` expression in silver, and the silver bronze-only contract intact (clean silver defers the structure hook; an injected `pl.read_csv("Files/…")` is blocked). The raw converter output on `Schools.pq` now `compile()`s.
+- **Deferred:** IMP-6 (a single ingest+join M query placing the join in bronze) is an architectural decision touching the bronze contract — recommended for a grilling session before coding. The live Fabric deploy/run round-trip for `engine=python` still needs a workspace.
 
 ### [0.5.0] — 2026-05-25
 

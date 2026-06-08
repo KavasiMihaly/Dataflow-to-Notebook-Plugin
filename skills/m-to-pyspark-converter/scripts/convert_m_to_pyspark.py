@@ -62,6 +62,20 @@ def get_generator(target: str):
     return cls()
 
 
+def write_output_file(generated_code: str, file_path: str) -> str:
+    """Write generated code to an exact FILE path, creating parent dirs.
+
+    Honours --output as a file (IMP-5) — never treats the path as a directory.
+    Returns the path written.
+    """
+    parent = os.path.dirname(file_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(generated_code)
+    return file_path
+
+
 def to_snake_case(name: str) -> str:
     """Convert a name to snake_case."""
     name = re.sub(r'[^a-zA-Z0-9\s_]', '', name)
@@ -142,6 +156,20 @@ def convert_single_file(args):
         print(f"No M partitions found in: {args.tmdl_file}")
         return 1
 
+    # --output (single FILE) is only meaningful when this .tmdl yields exactly
+    # one partition; with several, fall back to --output-dir to avoid clobber.
+    if args.output and len(extracts) == 1:
+        extract = extracts[0]
+        parsed = parser.parse(extract["m_code"])
+        generated_code = generator.generate(parsed, extract["table_name"], extract["source_file"])
+        output_file = write_output_file(generated_code, args.output)
+        print(f"  {extract['table_name']} -> {output_file}")
+        return 0
+    if args.output and len(extracts) > 1:
+        print(f"--output is a single file but {len(extracts)} partitions were found; "
+              f"use --output-dir instead.", file=sys.stderr)
+        return 1
+
     output_dir = args.output_dir or "."
     os.makedirs(output_dir, exist_ok=True)
 
@@ -173,7 +201,10 @@ def convert_m_file(args):
     parsed = parser.parse(m_code)
     generated_code = generator.generate(parsed, table_name, args.m_file)
 
-    if args.output_dir:
+    if args.output:
+        output_file = write_output_file(generated_code, args.output)
+        print(f"  {table_name} -> {output_file}")
+    elif args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         snake_name = to_snake_case(table_name)
         output_file = os.path.join(args.output_dir, f"nb_bronze_{snake_name}.py")
@@ -194,7 +225,10 @@ def convert_m_string(args):
     parsed = parser.parse(args.m_code)
     generated_code = generator.generate(parsed, "Query", "stdin")
 
-    if args.output_dir:
+    if args.output:
+        output_file = write_output_file(generated_code, args.output)
+        print(f"  Query -> {output_file}")
+    elif args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         output_file = os.path.join(args.output_dir, "nb_bronze_query.py")
         with open(output_file, "w", encoding="utf-8") as f:
@@ -272,6 +306,12 @@ Examples:
         help="Output directory for generated .py files (default: current directory)",
     )
     argparser.add_argument(
+        "--output",
+        help="Output FILE path for a single converted query (--m-file/--m-code/"
+             "single-table --tmdl-file). Written verbatim; parent dirs are created. "
+             "Use --output-dir for multi-table conversion.",
+    )
+    argparser.add_argument(
         "--list-tables",
         action="store_true",
         help="List tables and partitions without converting",
@@ -298,6 +338,9 @@ Examples:
         return list_tables(args)
 
     if args.tmdl_path:
+        if args.output:
+            argparser.error("--output (single file) is incompatible with --tmdl-path "
+                            "(multi-table); use --output-dir.")
         return convert_tmdl_folder(args)
     elif args.tmdl_file:
         return convert_single_file(args)

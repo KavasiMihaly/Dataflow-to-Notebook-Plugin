@@ -1,7 +1,7 @@
 {
   "name": "fabric-dataflow-migration-toolkit",
-  "version": "0.5.0",
-  "description": "End-to-end Power BI Dataflow Gen1 to Microsoft Fabric medallion notebook migration. Export, analyze, generate bronze/silver PySpark notebooks, deploy, and validate in Fabric.",
+  "version": "0.6.0",
+  "description": "End-to-end Power BI Dataflow Gen1 to Microsoft Fabric medallion notebook migration. Export, analyze, and generate bronze/silver notebooks on either engine — distributed PySpark (synapse_pyspark) or single-node Python (polars/duckdb/delta-rs) — then deploy and validate in Fabric.",
   "author": {
     "name": "Mihaly Kavasi",
     "email": "kavasi.mihaly@onedaybi.com",
