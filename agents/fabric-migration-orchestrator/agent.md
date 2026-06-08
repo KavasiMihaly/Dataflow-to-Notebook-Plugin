@@ -200,7 +200,7 @@ Resolve the notebook compute **engine** once, before any other config:
 
 Reject any other value with a clear error and halt. Record the resolved engine in Section 0 (`Notebook engine: pyspark | python`). One engine per migration — never mix.
 
-> ⚠️ **Interim limitation (until the Python builder slices land):** the engine is *recorded and threaded into scaffolding*, but the bronze/silver builders still emit **PySpark** notebooks regardless of engine. If the resolved engine is `python`, you MUST warn the user at Stage 1 and again in the Stage 7 approval text: *"engine=python is recorded, but Python (single-node polars/duckdb/delta-rs) notebook generation is not yet wired — this run will still produce PySpark notebooks. Continue with PySpark, or abort and wait for the Python engine slices."* Do not silently emit PySpark under a `python` label.
+> ⚠️ **Engine caveat (`python`):** when the resolved engine is `python`, the bronze/silver builders emit single-node **Python** notebooks (jupyter kernel; polars / duckdb / delta-rs) — this path is implemented and covered by the offline test suite, but the **live Fabric deploy + run round-trip has not yet been verified against a workspace** (manual check, deferred while offline). Warn the user at Stage 1 and again in the Stage 7 approval text: *"engine=python emits single-node Python notebooks (2 vCore / 16 GB) suited to sub-gigabyte workloads — confirm your data volume fits, and review the generated notebooks before the first live run."* `pyspark` remains the default and the byte-for-byte-stable path.
 
 #### Stage 1a — Source-workspace discovery (only if source_workspace_id is empty AND `--sample` flag is NOT set)
 
@@ -486,7 +486,7 @@ Write Sections 6, 7 (Bronze Build Plan), 8 (Silver Build Plan).
 - Source workspace: {name} ({N} dataflows, {M} queries)
 - Target Fabric workspace: {name}
 - Notebook engine: {pyspark | python}
-  {if python: "⚠️ Single-node runtime (2 vCore / 16 GB) — suited to sub-gigabyte workloads. INTERIM: Python generation is not yet wired; this run emits PySpark notebooks. See Stage 1 warning."}
+  {if python: "⚠️ Single-node runtime (2 vCore / 16 GB) — suited to sub-gigabyte workloads. Python notebooks (polars/duckdb/delta-rs) are emitted; the live Fabric deploy/run round-trip is not yet workspace-verified — review the notebooks before the first live run."}
 - Notebooks to be generated:
   - Bronze: {N_bronze}
   - Silver: {N_silver}
@@ -535,19 +535,23 @@ Task(
   subagent_type: "fabric-dataflow-migration-toolkit:fabric-bronze-builder:fabric-bronze-builder",
   prompt: "Build bronze notebook for query '<query_name>' from dataflow '<dataflow_name>'.
 
+  Engine: <engine> (read from Section 0 of migration-design.md — `pyspark` or `python`). One engine for the whole run.
+
   Read these inputs:
   - Section 6 row in '1 - Documentation/migration-design.md' for this query
   - The .pq file at '2 - Source Files/m_queries/<dataflow>/<query>.pq'
   - Risk catalog at '6 - Agentic Resources/reference/m-conversion-risk-catalog.md'
-  - Notebook template at '6 - Agentic Resources/reference/notebook-template.md'
-  - PySpark style guide at '6 - Agentic Resources/reference/pyspark-style-guide.md'
+  - If engine=pyspark: notebook template + PySpark style guide at '6 - Agentic Resources/reference/{notebook-template.md, pyspark-style-guide.md}'
+  - If engine=python: the Python reference set at '6 - Agentic Resources/reference/{python-notebook-metadata.md, python-style-guide.md, python-delta-patterns.md}' and the Python utilities notebook (read_bronze / add_bronze_metadata / table_path / validate_row_count signatures)
 
-  Convert the M code to PySpark using the m-to-pyspark-converter skill:
-    python \"${CLAUDE_PLUGIN_ROOT}/skills/m-to-pyspark-converter/scripts/convert_m_to_pyspark.py\" --m-file \"2 - Source Files/m_queries/<dataflow>/<query>.pq\"
+  Convert the M code with the m-to-pyspark-converter skill, passing the engine target:
+    python \"${CLAUDE_PLUGIN_ROOT}/skills/m-to-pyspark-converter/scripts/convert_m_to_pyspark.py\" --m-file \"2 - Source Files/m_queries/<dataflow>/<query>.pq\" --target <engine>
 
   Wrap risky patterns (per risk catalog) in 'HIGH RISK / HUMAN REVIEW REQUIRED' isolation cells with the standard template (see reference/m-conversion-risk-catalog.md for the cell shape).
 
-  Write '3 - Notebooks/bronze/nb_bronze_<query_snake>.ipynb' as a valid Jupyter JSON with synapse_pyspark kernel and lh_bronze lakehouse binding.
+  Write '3 - Notebooks/bronze/nb_bronze_<query_snake>.ipynb' as valid Jupyter JSON:
+  - engine=pyspark → synapse_pyspark kernel; existing PySpark idioms; lh_bronze binding.
+  - engine=python → jupyter kernel (microsoft.language_group 'jupyter_python'); polars + delta-rs; metadata via datetime.now(timezone.utc)/notebookutils.runtime.context; write via write_deltalake(table_path(...), arrow, mode='append', schema_mode='merge'); lh_bronze binding.
 
   Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status: 'success'|'failed', notebook_path, conforms_to_plan: bool, deviations: [], warnings: [], errors: [], risks_isolated: [risk_ids] }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,
@@ -575,11 +579,15 @@ Task(
   subagent_type: "fabric-dataflow-migration-toolkit:fabric-silver-builder:fabric-silver-builder",
   prompt: "Build silver notebook for query '<query_name>'.
 
-  CRITICAL: Silver notebooks read EXCLUSIVELY from bronze Delta tables via read_bronze('<source>'). NEVER read from external storage. Bronze sources for this query: <list>.
+  Engine: <engine> (read from Section 0 — `pyspark` or `python`). Same engine as the bronze stage.
 
-  [...same input pointers as bronze stage prompt, plus bronze-build evidence to confirm read_bronze() will resolve...]
+  CRITICAL: Silver notebooks read EXCLUSIVELY from bronze Delta tables via read_bronze('<source>'). NEVER read from external storage. Bronze sources for this query: <list>. (For engine=python this means no pl.read_csv/read_parquet/scan_delta of external paths, no abfss://, no Files/, no os.walk of raw — read_bronze() only.)
 
-  Write '3 - Notebooks/silver/nb_silver_<query_snake>.ipynb' as valid Jupyter JSON with lh_silver lakehouse binding.
+  [...same input pointers + engine dispatch as the bronze stage prompt (PySpark refs vs Python reference set + utilities notebook), plus bronze-build evidence to confirm read_bronze() will resolve...]
+
+  Write '3 - Notebooks/silver/nb_silver_<query_snake>.ipynb' as valid Jupyter JSON with lh_silver lakehouse binding:
+  - engine=pyspark → synapse_pyspark kernel; existing PySpark idioms.
+  - engine=python → jupyter kernel (jupyter_python); %run utilities/nb_utils_config; df = read_bronze('<src>'); polars transforms; drop bronze metadata then add_silver_metadata; write via write_deltalake(table_path(...), arrow, mode='overwrite', schema_mode='overwrite').
 
   Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,

@@ -13,7 +13,23 @@ Each entry has:
 - **Severity** — Low / Medium / High
 - **Detection** — regex/string the analyst scans for
 - **Best-effort PySpark** — the converter emits this code
+- **Python:** — engine-applicability note for `notebook_engine: python` (see below)
 - **Risk marker decision** — `clean` (no marker), `marked` (HIGH RISK cell), `todo-only` (TODO with no PySpark)
+
+---
+
+## Engine applicability (`pyspark` | `python`)
+
+Severities and detection signatures are **engine-independent** — the `m-query-analyst` scans the same patterns regardless of `notebook_engine`. The **mitigation idiom**, however, changes with the engine, so every RISK entry carries a `**Python:**` line tagged with one of four markers describing how the risk shifts on the single-node Python engine (polars / duckdb / delta-rs):
+
+| Marker | Meaning |
+|---|---|
+| **ease** | polars/delta-rs make this *simpler or safer* than Spark — usually because a distributed-execution hazard (unordered DataFrames, non-sequential IDs, ANSI cast job-kill, action-vs-transformation cost) disappears on a single node. A `marked`/Medium risk may downgrade toward `clean`. |
+| **worsen** | The single-node 16 GB ceiling makes this *riskier* — anything that assumes distributed memory (large joins, fan-out of a serial Excel read). Size against memory before choosing `python`. |
+| **N-A** | Spark-only; **no Python equivalent** (e.g. V-Order / Native Execution Engine / Vegas cache — see the note under the severity matrix). |
+| **unchanged** | Same effort and the same review concern on both engines (connector auth, regex string ops, OneLake-shortcut admin steps). |
+
+These markers are advisory for human reviewers and the Python builders; they do **not** change the per-occurrence severity the analyst reports.
 
 ---
 
@@ -65,6 +81,8 @@ df_raw = spark.read.format("csv") \
 # === END HIGH RISK ===
 ```
 
+**Python:** unchanged — still HIGH RISK. polars reads the same blob/OneLake path (`pl.read_csv` over the `/lakehouse/default/Files/...` mount or an `abfss://` path); the connector/auth/path-semantics review concern is engine-independent.
+
 ---
 
 ## RISK-02 — Custom M Functions / Combine Files Pattern (Medium, marked)
@@ -88,6 +106,8 @@ df_raw = spark.read.format("csv") \
 # (Parameter, Sample file, Transform Sample file, Transform file) are not needed.
 # === END HIGH RISK ===
 ```
+
+**Python:** ease — polars reads a whole folder declaratively too: `pl.read_csv("/lakehouse/default/Files/<folder>/*street*.csv")` (or `glob` + `pl.concat(..., how="diagonal_relaxed")` for multi-file). The per-file M function still has no equivalent, but single-node makes the combined read simpler to reason about; still review the glob.
 
 ---
 
@@ -115,6 +135,8 @@ df_raw = spark.createDataFrame(df_pd)
 - `pre-convert-csv` — emit a separate prep notebook + bronze reads CSV
 - `spark-excel-maven` — `spark.read.format("com.crealytics.spark.excel")` (requires environment config)
 
+**Python:** worsen — the default in-cell read (`pd.read_excel` / `pl.read_excel`) stays single-threaded AND there is no `spark.createDataFrame` to fan the result out to a cluster, so large workbooks press harder against the 16 GB single-node ceiling. Prefer the `pre-convert-csv` strategy on the Python engine for files over ~100 MB (`spark-excel-maven` is Spark-only — N-A here).
+
 ---
 
 ## RISK-04 — `Table.Skip` (Low, clean)
@@ -130,6 +152,8 @@ df_raw = spark.createDataFrame(df_pd)
 # For spark.read.csv: .option("skipRows", N) (Spark 3.4+) OR
 df_raw = df_raw.zipWithIndex().filter(lambda x: x[1] >= N).map(lambda x: x[0])
 ```
+
+**Python:** ease — `pl.read_csv(path, skip_rows=N)` on read, or `df.slice(N)` / `df.tail(-N)` on a frame. No `zipWithIndex` RDD hack; row order is deterministic on a single node.
 
 ---
 
@@ -149,6 +173,8 @@ df = df.selectExpr(
 )
 ```
 
+**Python:** ease — first-class `df.unpivot(index=[id_cols], on=value_columns, variable_name="year", value_name="value")`. No `stack()` string-building or `selectExpr`; the column list is a plain Python list.
+
 ---
 
 ## RISK-06 — `Table.Pivot` (Medium, clean)
@@ -167,6 +193,8 @@ distinct_vals = [r[0] for r in df.select("Attribute.1").distinct().collect()]
 df = df.groupBy("LSOA Code").pivot("Attribute.1", distinct_vals).agg(F.first("Value"))
 ```
 
+**Python:** ease — `df.pivot(on="Attribute.1", index="LSOA Code", values="Value", aggregate_function="first")`. polars discovers the distinct pivot values itself (no extra `.distinct().collect()` round-trip) and the operation is eager/in-memory.
+
 ---
 
 ## RISK-07 — `Splitter.SplitTextByEachDelimiter` (Low, clean)
@@ -180,6 +208,8 @@ df = df.groupBy("LSOA Code").pivot("Attribute.1", distinct_vals).agg(F.first("Va
 df = df.withColumn("metric", F.regexp_extract(F.col("Attribute"), r'^(.+)_(\d+)$', 1))
 df = df.withColumn("year",   F.regexp_extract(F.col("Attribute"), r'^(.+)_(\d+)$', 2))
 ```
+
+**Python:** unchanged — same regex approach: `pl.col("Attribute").str.extract(r'^(.+)_(\d+)$', 1)` for metric, group `2` for year. Pure column-expression work, identical effort on either engine.
 
 ---
 
@@ -195,6 +225,8 @@ df = df.withColumn("year",   F.regexp_extract(F.col("Attribute"), r'^(.+)_(\d+)$
 | `Text.BeforeDelimiter(col, " ", {0, RelativePosition.FromEnd})` | `F.regexp_extract(F.col("col"), r'^(.*)\s\S+$', 1)` |
 | `Text.AfterDelimiter(col, "_", 0)` | `F.split(F.col("col"), "_")[1]` |
 
+**Python:** unchanged — `pl.col("col").str.split(" -").list.first()` (before) / `.list.get(1)` (after), or `str.extract` for the from-end form. Same string-op effort.
+
 ---
 
 ## RISK-09 — `Table.TransformColumnTypes` with 50+ columns (Low, clean)
@@ -202,6 +234,8 @@ df = df.withColumn("year",   F.regexp_extract(F.col("Attribute"), r'^(.+)_(\d+)$
 **Detection:** `Table\.TransformColumnTypes\s*\(` with 50+ pairs in the type list.
 
 **PySpark (recommended):** define a `StructType` schema and pass to `spark.read.csv(..., schema=schema)` to avoid post-read casts.
+
+**Python:** ease — pass a `schema_overrides={col: pl.Int64, ...}` dict (or full `schema=`) to `pl.read_csv` to type-on-read, or `df.cast({col: dtype, ...})` for a one-shot bulk cast. The polars type map lives in the converter's §4 addendum (`Currency.Type`→`pl.Decimal(19,4)`, etc.).
 
 ---
 
@@ -217,6 +251,8 @@ df = df.join(df_lookup, df["URN"] == df_lookup["School ID"], "left")
 ```
 
 **Note:** if the right side is in another dataflow, the right-side bronze notebook must run before the silver notebook that joins it.
+
+**Python:** worsen — `df.join(read_bronze("ofsted_rating"), left_on="URN", right_on="School ID", how="left")` is mechanically simpler, BUT polars materializes both sides in single-node RAM; a join whose inputs comfortably fit a Spark cluster can OOM the 16 GB Python container. Keep the cross-dataflow ordering note, and on the Python engine size the joined tables against single-node memory before choosing this engine.
 
 ---
 
@@ -236,6 +272,8 @@ df = df.withColumn(
 )
 ```
 
+**Python:** unchanged — direct one-to-one: `pl.when(pl.col("Rating") == "Outstanding").then(1).when(...).otherwise(None).alias("Ofsted Rank")`. Same conditional-expression effort.
+
 ---
 
 ## RISK-12 — `Replacer.ReplaceText` chains (Low, clean)
@@ -248,6 +286,8 @@ df = df.withColumn(
 property_type_map = {"F": "Flat", "D": "Detached", "S": "Semi-Detached", "T": "Terraced", "O": "Other"}
 df = df.replace(property_type_map, subset=["Property Type"])
 ```
+
+**Python:** unchanged — `df.with_columns(pl.col("Property Type").replace(property_type_map))` (or `replace_strict` to error on unmapped values). Same dictionary-driven approach.
 
 ---
 
@@ -272,6 +312,8 @@ df = df.withColumn("Transaction ID", F.monotonically_increasing_id() + 1)
 # === END HIGH RISK ===
 ```
 
+**Python:** ease — the distributed-ID hazard disappears on a single node. `df.with_row_index("Transaction ID", offset=1)` produces a genuinely sequential index (after an explicit `df.sort(...)` to fix ordering), so the HIGH RISK marker can usually downgrade to a clean conversion. Still review if the original ID is a reproducible cross-table join key.
+
 ---
 
 ## RISK-14 — `[Attributes]?[Hidden]?` optional record access (Low, clean — drop)
@@ -279,6 +321,8 @@ df = df.withColumn("Transaction ID", F.monotonically_increasing_id() + 1)
 **Detection:** `\[Attributes\]\?\s*\[Hidden\]\?`
 
 **PySpark:** drop the filter entirely. Spark's blob readers do not return system files.
+
+**Python:** unchanged — same guidance: drop the filter. The `/lakehouse/default/Files/...` mount + `glob`/`pl.read_*` do not surface the `[Attributes][Hidden]` system records either.
 
 ---
 
@@ -302,6 +346,8 @@ df_raw = spark.read.format("csv") \
     .option("header", "true") \
     .load(abfss_path("ukstat", "Education/2023-2024/england_school_information.csv"))
 ```
+
+**Python:** unchanged — same refactor-to-config recommendation. Put the `STORAGE_ACCOUNT`/`CONTAINERS` map and an `abfss_path()` (or mount-relative) resolver in the Python `nb_utils_config` notebook; the bronze cell calls `pl.read_csv(abfss_path(...))`. No hard-coded literals on either engine.
 
 ---
 
@@ -340,6 +386,8 @@ df_raw = spark.read.format("csv") \
 # === END HIGH RISK ===
 ```
 
+**Python:** unchanged — still HIGH RISK / todo-only. The migration path is the same engine-independent OneLake shortcut (one-time admin step in the Fabric UI) followed by a normal lakehouse read; on the Python engine Step 2 becomes `pl.read_csv("/lakehouse/default/Files/<shortcut_name>/**/*.csv")` over the mount.
+
 ---
 
 ## RISK-17 — `Table.ExpandRecordColumn` (Low, clean)
@@ -363,6 +411,8 @@ df = df.select(
 ```
 
 **Note:** if the column is `MapType` (JSON loaded as a map, not a struct), use `F.col("rec").getItem("aa").alias("aa")` instead — `rec.*` only works on structs. `select("*", "rec.*")` places struct fields at the end of the schema, which differs from M's ordering — reorder downstream if column order is load-bearing.
+
+**Python:** unchanged — `df.unnest("rec")` flattens a struct column to top-level columns (rename via `pl.col("rec").struct.field("aa").alias("aa")`). For a map-typed column use `pl.col("rec").struct.field(...)` / `list.eval` equivalents. Same struct-vs-map distinction applies.
 
 ---
 
@@ -404,6 +454,8 @@ df = df_with_idx.filter(F.col("__idx") > 1).drop("__idx").toDF(*new_cols)
 # === END HIGH RISK ===
 ```
 
+**Python:** ease — Context A is identical (`pl.read_csv(path, has_header=True)`). Context B (post-load promotion) is much safer: polars frames preserve row order, so there is no Spark "unordered DataFrame" hazard — promote via `df.rename(dict(zip(df.columns, df.row(0))))` then `df.slice(1)`, no `monotonically_increasing_id()` window. The post-load form can usually drop the HIGH RISK marker.
+
 ---
 
 ## RISK-19 — `Text.BetweenDelimiters` (Medium, marked when non-default indices)
@@ -432,6 +484,8 @@ def between_delimiters(col, start, end):
 **Note:** `regexp_extract` returns empty string `""` on no match; M `Text.BetweenDelimiters` returns `null`. Wrap with `F.when(F.length(...) > 0, ...).otherwise(F.lit(None))` if downstream code distinguishes null from empty. ALWAYS `re.escape` literal delimiter strings — `Text.BetweenDelimiters` treats them literally; `regexp_extract` interprets them as regex.
 
 **Mark as HIGH RISK if:** the M call has `startIndex` or `endIndex` arguments (e.g. `Text.BetweenDelimiters(_, "[", "]", 2)` for the 3rd occurrence), since `regexp_extract` only returns the first match. Use `regexp_extract_all` (Spark 3.5+) + index lookup, and flag for review.
+
+**Python:** unchanged — `pl.col("raw").str.extract(r"\((.*?)\)", 1)` for the simple case (returns `null` on no match — closer to M than Spark's empty string). The Nth-occurrence form is still HIGH RISK: use `str.extract_all` + `list.get(n)` and flag for review, exactly as on Spark.
 
 ---
 
@@ -471,6 +525,8 @@ df = df.replace(["#REF!", "#VALUE!", "#N/A", "NA"], None).fillna({"sales": 0, "q
 # === END HIGH RISK ===
 ```
 
+**Python:** ease — no ANSI-mode dichotomy. `pl.col("sales").cast(pl.Float64, strict=False)` returns `null` on a bad value (never kills the run), then `.fill_null(0)`; the per-column map is `df.fill_null({"sales": 0, "qty": 0})`. The "loud failure vs silent null" caveat that makes this HIGH RISK on Spark does not arise.
+
 ---
 
 ## RISK-21 — `Table.TransformColumnNames` (Low, clean)
@@ -488,6 +544,8 @@ df = df.toDF(*[c.strip().lower().replace(" ", "_") for c in df.columns])
 ```
 
 **Note:** `toDF(*names)` requires `len(names) == len(df.columns)` and every element must be a string (no `None`). M's `MaxLength` option for truncation + dedup is non-trivial — emit `[name_fn(c)[:max_len] for c in df.columns]` and then assert `len(set(...)) == len(...)` rather than silently deduping. Avoid chaining `withColumnRenamed` N times — it builds an O(N²) logical plan; use `toDF` or `select(*aliased_cols)`.
+
+**Python:** ease — `df.rename({old: name_fn(old) for old in df.columns})` applies all renames in one call with no O(N²) plan to avoid (the chained-`withColumnRenamed` pitfall is Spark-specific). The `MaxLength` truncation + dedup-assert guidance still applies.
 
 ---
 
@@ -507,6 +565,8 @@ df = df.withColumn("s_de", F.date_format(F.col("v"), "dd.MM.yyyy HH:mm:ss"))
 
 **Note:** `cast("string")` on a date yields ISO (`2024-06-24`), NOT M's en-US default (`6/24/2024 2:32:22 PM`). If downstream pipelines parse the string back, use `F.date_format(col, "M/d/yyyy h:mm:ss a")` to mimic M. `Text.From(null) -> null` and PySpark `cast` preserves NULL identically. `Text.From(true) -> "TRUE"` (uppercase); PySpark `cast("string")` on bool yields `"true"` (lowercase) — wrap with `F.upper(...)` if downstream code does `== "TRUE"`.
 
+**Python:** unchanged — `pl.col("v").cast(pl.Utf8)` for the default; `pl.col("v").dt.strftime("%-m/%-d/%Y %-I:%M:%S %p")` to mimic M's en-US format. The same ISO-vs-en-US date and `"true"`-vs-`"TRUE"` boolean caveats apply (cast yields lowercase `"true"`; wrap with `.str.to_uppercase()`).
+
 ---
 
 ## RISK-23 — `Text.Lower` (Low, clean)
@@ -520,6 +580,8 @@ df = df.withColumn("lower_name", F.lower(F.col("name")))
 ```
 
 **Note:** `F.lower` is locale-insensitive (UTF-16 simple case folding). M's optional `culture` arg enables Turkic dotless-I handling (`İ -> i`); Spark doesn't. Almost never matters but flag if culture was explicitly passed in the M code. NULL handling matches M exactly.
+
+**Python:** unchanged — `pl.col("name").str.to_lowercase()`. Also locale-insensitive (no Turkic culture handling); same "flag if a culture arg was passed" caveat, same NULL behaviour.
 
 ---
 
@@ -545,6 +607,8 @@ df = df.withColumn("clean", F.regexp_replace(F.col("raw"), r"^[<>/]+|[<>/]+$", "
 
 **Note:** `F.trim` only strips ASCII whitespace + a few Unicode spaces. M strips all Unicode whitespace; for high-fidelity Unicode trim use `F.regexp_replace(col, r"^\s+|\s+$", "")`. Verify Fabric's current Spark version before committing to `btrim` — older Fabric runtimes (Spark < 3.5) need the regexp_replace fallback.
 
+**Python:** unchanged — `pl.col("raw").str.strip_chars()` (default whitespace) or `.str.strip_chars("<>/")` (custom char set, no Spark-version gate needed). For full Unicode parity use `.str.replace_all(r"^\s+|\s+$", "")`. Same Unicode-whitespace caveat.
+
 ---
 
 ## RISK-25 — `List.RemoveNulls` (Low, clean — context-dependent)
@@ -566,6 +630,8 @@ clean = [x for x in lst if x is not None]
 
 **Note:** Default to Context A unless the M expression is clearly a literal list or an array-column transform. `F.filter` with a lambda is Spark 3.1+; on earlier versions use `F.expr("filter(arr, x -> x is not null)")`.
 
+**Python:** unchanged — same three contexts. Context A: `df.drop_nulls(subset=["value"])`; Context B (array column): `pl.col("arr").list.drop_nulls()`; Context C (literal): `[x for x in lst if x is not None]`. No Spark-version gate on the array form.
+
 ---
 
 ## RISK-26 — `List.Distinct` (Low, clean — context-dependent)
@@ -586,6 +652,8 @@ distinct = list(dict.fromkeys(lst))
 ```
 
 **Note:** `df.distinct()` deduplicates *all columns together* — almost never what `List.Distinct(Table.Column(t,"x"))` means. M `List.Distinct(lst, Comparer.OrdinalIgnoreCase)` requires deduping on a case-folded key: `df.dropDuplicates([F.lower(F.col("x")).alias("__k")])` semantics. `array_distinct` order-preservation: documented order-preserving in Spark 3.5+; on older versions emit the literal-list pattern via `F.expr("transform(...)")` + manual dedupe if order is load-bearing.
+
+**Python:** unchanged — same three contexts. Context A: `df.unique(subset=["value"], maintain_order=True)` (NOT bare `df.unique()` unless all columns matter); Context B (array column): `pl.col("arr").list.unique(maintain_order=True)`; Context C (literal): `list(dict.fromkeys(lst))`. For OrdinalIgnoreCase dedup, key on `pl.col("x").str.to_lowercase()`.
 
 ---
 
@@ -610,6 +678,8 @@ n = len(lst)
 ```
 
 **Note:** `df.count()` is an *action* — triggers a full job, can be expensive. If the value is only needed inside another expression, use `F.count("*").over(...)` or precompute and broadcast. `F.size(null_array)` returns `-1` in Spark legacy mode (`null` with `spark.sql.legacy.sizeOfNull=false`); M `List.Count(null)` errors. Wrap with `F.when(col.isNull(), 0).otherwise(F.size(col))` for parity.
+
+**Python:** ease — no action-vs-transformation hazard, because polars is eager and single-node. Context A is a cheap `df.height` / `len(df)` (no Spark job to trigger or broadcast around); Context B (per-row array length) is `pl.col("arr").list.len()`; Context C is `len(lst)`. The "misclassification is expensive" worry that makes this Medium on Spark largely evaporates.
 
 ---
 
@@ -639,6 +709,8 @@ df = df.withColumn("col2", my_udf(F.col("col")))
 
 **Note:** `F.transform` lambda receives a `Column` argument — your transform body must use `F.*` functions, not Python-level operations. For context C, identify what `fn` does and rewrite to native column expressions (`F.lower`, `F.regexp_replace`, etc.) rather than defaulting to a UDF. M `List.Transform` over heterogeneous lists has no Spark equivalent — `F.transform` requires a typed array; flag for review.
 
+**Python:** ease — the Catalyst-vs-UDF performance cliff does not exist in polars. Context B (array column): `pl.col("arr").list.eval(pl.element() + 1)`; Context C (column of values): a plain native expression like `pl.col("col").str.to_lowercase()`. Even a `.map_elements()` Python fallback is acceptable on small single-node data, so this drops from Medium toward a clean conversion.
+
 ---
 
 ## RISK-29 — `List.AnyTrue` (Medium, marked when context unclear)
@@ -665,6 +737,8 @@ n = df.filter(F.col("flag") == True).limit(1).count() > 0
 
 **Note:** `F.array_contains(arr, True)` returns NULL if the array contains a NULL element; `F.exists(arr, lambda x: x)` ignores NULLs and matches M behavior. Context D still triggers a Spark job — push the boolean check upstream if possible. `F.exists` lambda must use `F.*` Column ops, not Python `if`.
 
+**Python:** ease — no Spark-job concern for the row-level check (Context D). Context A: `any(lst)`; Context B (array column): `pl.col("flags").list.any()`; Context C (across rows): `df.select(pl.col("flag").any())`; Context D: `df.filter(pl.col("flag")).height > 0` — all cheap and eager on a single node. The "context unclear → mark Medium" caution mainly reflects Spark's job cost, which is gone here.
+
 ---
 
 ## RISK-30 — `Text.Combine` with separator (Low, clean — context-dependent)
@@ -686,6 +760,8 @@ s = " | ".join([x for x in lst if x is not None])
 
 **Note:** ALWAYS use `F.concat_ws(sep, ...)`, NEVER `F.concat(...)` — `F.concat` has no separator AND propagates NULL (`F.concat("a", NULL) -> NULL`); `F.concat_ws` treats NULLs as empty strings, closer to M's "nulls are ignored" semantics. For an *array column* the correct function is `F.array_join(arr, sep)`, not `F.concat_ws`. For exact M parity (M skips nulls entirely, so `Text.Combine({"a", null, "b"}, ",")` → `"a,b"`, while `F.concat_ws("a", NULL, "b")` → `"a,,b"`), filter nulls first with `F.array_compact` (Spark 3.4+) before `F.array_join`. The shape `Text.Combine(list, sep)` is the array form — emit `F.array_join`, not `F.concat_ws`, when the first M argument is a list expression rather than separate columns.
 
+**Python:** unchanged — separate columns: `pl.concat_str([pl.col("city"), pl.col("state"), pl.col("zip")], separator=" | ", ignore_nulls=True)`; array column: `pl.col("arr").list.join(" | ")`. Use `ignore_nulls=True` for M's null-skipping parity; same "array form vs separate-columns form" distinction.
+
 > **NOTE:** the static `function_map.py` previously mapped `Text.Combine -> F.concat`, which is wrong when a separator is present. The catalog entry above is the canonical mitigation; the function map has been corrected to `F.concat_ws`.
 
 ---
@@ -699,6 +775,15 @@ s = " | ".join([x for x in lst if x is not None])
 | **Low** | Clean conversion — no marker | RISK-04, RISK-07–12, RISK-14, RISK-17, RISK-21–26, RISK-30 |
 
 The `m-query-analyst` reports severity per detected occurrence; the builder applies the marker decision based on this table.
+
+### Spark-only optimizations (N-A on the Python engine)
+
+These are **not M patterns** (so they have no RISK-NN entry) but are the clearest **N-A** cases for the Python engine, called out here so reviewers don't look for a polars equivalent that doesn't exist:
+
+- **V-Order / `spark.sql.parquet.vorder.enabled`** — Spark-only write optimization. No delta-rs/polars equivalent; drop it on the Python engine. A Python-written Delta table can be V-Order-optimized later by a separate Spark `OPTIMIZE` job or by the SQL endpoint's background optimization.
+- **Native Execution Engine (NEE)** and the **Vegas cache** — Spark-runtime features with no single-node Python counterpart.
+
+If the source PySpark notebooks (or `delta-lake-patterns.md` gold-layer guidance) set any of these, the Python builder simply omits them — they are performance tuning, not correctness, and the table remains queryable without them.
 
 ---
 

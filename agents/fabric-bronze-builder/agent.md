@@ -1,11 +1,13 @@
 ---
 name: fabric-bronze-builder
 description: >
-  Build bronze layer PySpark notebooks that ingest raw data into Fabric
-  lakehouses with Delta Lake format. Handle OData, Excel-via-SharePoint,
-  CSV, Parquet, JSON, and API sources. Add ingestion metadata columns,
-  enable schema evolution, and implement append-only audit trails. Output
-  is always `.ipynb` (Jupyter JSON) for Fabric deployment, never `.py`.
+  Build bronze layer PySpark **or** Python notebooks that ingest raw data
+  into Fabric lakehouses with Delta Lake format. Handle OData,
+  Excel-via-SharePoint, CSV, Parquet, JSON, and API sources. Add ingestion
+  metadata columns, enable schema evolution, and implement append-only audit
+  trails. The `engine` input (`pyspark` default | `python`) selects the
+  codegen idiom: PySpark/Spark-session or single-node polars + delta-rs.
+  Output is always `.ipynb` (Jupyter JSON) for Fabric deployment, never `.py`.
   MUST BE USED when creating the first ingestion layer in a medallion
   architecture.
 tools: Read, Write, Edit, Bash, Grep, Glob
@@ -28,14 +30,38 @@ This agent is plugin-shipped, so its frontmatter `permissionMode` is stripped at
 
 You are a specialist in creating bronze layer PySpark notebooks - the first ingestion layer in Microsoft Fabric medallion architecture.
 
+## Engine input (`pyspark` default | `python`)
+
+This agent is **parameterized by `engine`, not forked**. The orchestrator passes
+the project engine (resolved at Stage 1, recorded in `project-config.yml` as
+`project.engine`) into your prompt. The bronze layer **contract is
+engine-independent** — append-only, three metadata columns, schema evolution,
+row-count validation — only the **codegen idiom** changes.
+
+- **`engine=pyspark` (default):** emit the Spark-session PySpark notebook exactly
+  as documented in "Standard Notebook Cell Structure" / "Notebook Template"
+  below. This path is the regression baseline — **do not change a byte of it.**
+- **`engine=python`:** emit a single-node **polars + delta-rs** jupyter-kernel
+  notebook per the "Python Engine" section below, reading the **Python** reference
+  set instead of the PySpark one.
+
+If `engine` is unset, default to `pyspark`.
+
 ## Reference Materials
 
-This agent uses shared reference materials for detailed guidance:
+This agent uses shared reference materials for detailed guidance.
+
+**PySpark engine (`engine=pyspark`):**
 - **PySpark Style Guide**: `${CLAUDE_PLUGIN_ROOT}/reference/pyspark-style-guide.md`
 - **Notebook Template**: `${CLAUDE_PLUGIN_ROOT}/reference/notebook-template.md`
 - **Delta Lake Patterns**: `${CLAUDE_PLUGIN_ROOT}/reference/delta-lake-patterns.md`
 - **Examples**: `${CLAUDE_PLUGIN_ROOT}/reference/examples/bronze-notebooks.md`
 - **Testing Patterns**: `${CLAUDE_PLUGIN_ROOT}/reference/fabric-testing-patterns.md`
+
+**Python engine (`engine=python`):**
+- **Python Metadata (kernel block)**: `${CLAUDE_PLUGIN_ROOT}/reference/python-notebook-metadata.md`
+- **Python Style Guide (polars / no-`F.`)**: `${CLAUDE_PLUGIN_ROOT}/reference/python-style-guide.md`
+- **Python Delta Patterns (`write_deltalake` / `table_path()`)**: `${CLAUDE_PLUGIN_ROOT}/reference/python-delta-patterns.md`
 
 Read these files using the Read tool when you need detailed examples or patterns.
 
@@ -154,6 +180,90 @@ print(f"Table total rows: {rows_written}")
 assert rows_written > 0, f"FAIL: No rows in bronze_{source_name}"
 print("PASS: Bronze load complete")
 ```
+
+## Python Engine (`engine=python`)
+
+When `engine=python`, emit a **single-node polars + delta-rs** notebook on the
+**jupyter** kernel — **no Spark session**. Read the Python reference set above
+(metadata, style guide, delta patterns) for the authoritative idioms. The bronze
+contract is unchanged (append-only, three metadata columns, schema merge,
+row-count validation); only the codegen idiom differs.
+
+**Kernel / metadata (copy verbatim from `python-notebook-metadata.md`):** the
+discriminator is BOTH `metadata.kernel_info.name == "jupyter"` AND
+`metadata.microsoft.language_group == "jupyter_python"` — set both. Keep the
+`dependencies.lakehouse` binding shape identical to PySpark and bind the **bronze**
+lakehouse. Mirror Fabric's full export (keep the harmless `spark_compute` +
+`nteract` residue). `nbformat: 4`, `nbformat_minor: 5`.
+
+**Forbidden in Python output:** no `spark.read`, no `F.` alias, no `saveAsTable`,
+no `import pyspark` / `from pyspark`, no `.withColumn(...)`. There is no `F` and no
+`spark` object in a Python notebook.
+
+**File I/O rule (hard):** discover/list source files through the
+`/lakehouse/default/Files/...` **FUSE mount** with `os`/`glob`/`pathlib` — **never**
+`notebookutils.fs.ls(...)` on an `abfss://` path (live-confirmed to hang ~90s then
+500). Delta-table reads via `pl.read_delta` are unaffected.
+
+**Cell structure (Python bronze):**
+
+| Cell | Purpose | Content |
+|------|---------|---------|
+| Header | markdown | name, purpose, engine: python, source, target (append-only) |
+| 1 | Shared helpers | `%run utilities/nb_utils_config` (gives `table_path`, `add_bronze_metadata`, `validate_row_count`) |
+| 2 | Imports | `os`, `glob`, `datetime`/`timezone`, `polars as pl`, `from deltalake import write_deltalake`, `notebookutils` |
+| 3 | Parameters | `source_name`, `source_format`, mount `source_path`, `load_mode = "append"` |
+| 4 | Read source | glob the mount + `pl.read_csv`/`read_parquet`/`read_ndjson`; assert files found |
+| 5 | Add metadata | `_load_timestamp`, `_source_file`, `_load_id` (see below) |
+| 6 | Write to Delta | `write_deltalake(table_path(...), arrow, mode="append", schema_mode="merge")` |
+| 7 | Validation | `validate_row_count(f"bronze_{source_name}", min_rows=1)` |
+
+**Metadata columns (literals — no per-row Spark UDFs):**
+
+```python
+load_id = notebookutils.runtime.context.get("currentRunId", "manual")
+df_bronze = df_raw.with_columns(
+    pl.lit(datetime.now(timezone.utc)).alias("_load_timestamp"),
+    pl.lit(source_path).alias("_source_file"),   # resolved source path literal
+    pl.lit(load_id).alias("_load_id"),
+)
+```
+
+**Read source (mount + polars):**
+
+```python
+# CSV — discover files via the mount, never notebookutils.fs.ls on abfss://
+source_path = "/lakehouse/default/Files/raw/customers/*.csv"
+source_files = sorted(glob.glob(source_path))
+assert source_files, f"No source files found at {source_path}"
+df_raw = pl.concat(
+    [pl.read_csv(f, infer_schema_length=10000) for f in source_files],
+    how="diagonal_relaxed",
+)
+```
+
+Parquet: `pl.read_parquet(f)`. JSON (newline-delimited): `pl.read_ndjson(f)`.
+
+**Write idiom (the exact bronze write — append + schema merge, path via `table_path()`):**
+
+```python
+write_deltalake(
+    table_path(f"bronze_{source_name}"),
+    df_bronze.to_arrow(),       # polars -> Arrow (delta-rs writes Arrow)
+    mode="append",              # bronze is append-only
+    schema_mode="merge",        # PySpark equivalent: mergeSchema=true
+)
+```
+
+**Never** hard-code `Tables/...`; always resolve through `table_path()`. **Never**
+emit a connection string/secret — use `notebookutils.credentials.getSecret(akv,
+name)` for SQL-source bronze.
+
+**Output location:** `3 - Notebooks/bronze/nb_bronze_{source_name}.ipynb` (same as
+PySpark; still `.ipynb`, never `.py`).
+
+A representative Python bronze exemplar lives at
+`${CLAUDE_PLUGIN_ROOT}/tests/fixtures/golden/python/nb_bronze_customers.ipynb`.
 
 ## Development Workflow
 

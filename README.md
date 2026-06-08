@@ -181,7 +181,15 @@ A migration emits notebooks for **one** compute engine, chosen once via the `not
 
 The migration holds only M code (never source rows), so there is **no data-driven engine advisory** — picking the engine is the user's call, and the single-node memory caveat surfaces in the Stage 7 approval text.
 
-> **Status:** the toggle is plumbed end-to-end (config → `--engine` flag → `project-config.yml` → Section 0), but **Python notebook generation is not yet wired** — the bronze/silver builders currently emit PySpark for both values. Until the Python engine slices land, selecting `python` is recorded and warned about, but still produces PySpark notebooks. Leave the default `pyspark` for now.
+#### Python engine limitations
+
+The `python` engine runs in Fabric's single-node Python notebook (2 vCore / 16 GB, `jupyter` kernel, polars / duckdb / delta-rs). Before selecting it, note these runtime caveats — bake them into your engine choice:
+
+- **Single-node memory.** Everything runs in one ~16 GB container with **no distributed fan-out**. Comfortable up to roughly **1 GB** of working data; multi-GB transforms (especially large joins) are risky and may OOM. There is no source-volume signal in the migration (it holds only M code), so sizing is your call — pick `pyspark` for anything that needs a cluster.
+- **No env vars, no Environment item, no library item.** The Python notebook has **no Fabric Environment item, no environment variables, and no item-based custom libraries** — any package not pre-installed must be brought in with an inline `%pip install`. Configuration that a Spark path would read from an Environment must be inlined or read from `project-config.yml`.
+- **Some Delta Lake features unsupported.** Delta I/O goes through **delta-rs (`deltalake`) + polars**, which is *not* the full Delta spec — **some Delta Lake features are unsupported**. In particular **V-Order, the Native Execution Engine (NEE), and the Vegas cache are Spark-only and have no Python equivalent** (they are write-time performance optimizations, not correctness — tables stay queryable without them, and can be V-Order-optimized later by a separate Spark `OPTIMIZE` job or the SQL endpoint's background optimization). The `m-conversion-risk-catalog.md` tags every M risk with a `**Python:**` applicability note (ease / worsen / N-A / unchanged) so reviewers know which mitigations change on this engine.
+
+> **Status:** the toggle is plumbed end-to-end (config → `--engine` flag → `project-config.yml` → Section 0), and the **Python builders + the M→Python converter now emit Python-kernel notebooks** — `engine=python` produces `jupyter`-kernel bronze + silver `.ipynb` with polars/delta-rs idioms (`microsoft.language_group: jupyter_python`, lakehouse binding, `write_deltalake` writes via the `table_path()` resolver). What remains is the **live Fabric round-trip validation** (deploy the notebooks, confirm they register as Python notebooks and that `table_path()` writes register the Delta tables) — that step is **manual and offline for now**, exercised when Fabric access is available. Treat the Python engine as **functionally complete but not yet round-trip-verified against a live workspace**; `pyspark` remains the default and the regression baseline.
 
 ### Optional: Sharing unknown M patterns
 

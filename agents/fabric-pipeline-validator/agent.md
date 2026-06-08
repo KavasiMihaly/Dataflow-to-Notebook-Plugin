@@ -28,7 +28,7 @@ The orchestrator spawns you with `run_in_background: true, mode: "acceptEdits"`.
 
 **Severity rules:**
 
-- **FAIL** — any notebook is invalid JSON, any silver notebook reads from external storage (violates `read_bronze()`-only contract), any deployed notebook returned non-zero exit, any expected target Delta table has 0 rows in non-dry-run mode.
+- **FAIL** — any notebook is invalid JSON, any silver notebook reads from external storage (violates `read_bronze()`-only contract, **on either engine**), any Python notebook missing the `microsoft.language_group == "jupyter_python"` discriminator, any cross-engine idiom leak (Spark idiom in a `jupyter_python` notebook, or delta-rs/polars idiom in a `synapse_pyspark` notebook), any notebook whose detected engine ≠ the Section-0 engine, any deployed notebook returned non-zero exit, any expected target Delta table has 0 rows in non-dry-run mode.
 - **WARN** — risk-isolation cells present (informational — flagged so the user knows where to review), naming deviations from plan, row counts below expected thresholds.
 - **INFO** — successful builds, passed structural checks.
 
@@ -48,23 +48,39 @@ Check the env var `FABRIC_MIGRATION_DRY_RUN`:
 - `1` or set: **dry-run mode** — static checks only, skip Stage 12 runtime checks
 - empty/unset: **full mode** — both static and runtime
 
+## Step 0 — Detect the engine (per notebook)
+
+This migration runs **one engine per project** (`engine` is recorded in Section 0 / `project-config.yml`), but detect it **from each notebook's own metadata** so the contract you enforce matches the notebook you're holding:
+
+- **Python engine** — `metadata.microsoft.language_group == "jupyter_python"` **and** `metadata.kernel_info.name == "jupyter"`. Single-node polars / delta-rs.
+- **PySpark engine** — `metadata.kernel_info.name == "synapse_pyspark"`. Distributed Spark.
+
+If a notebook's detected engine does NOT match the Section-0 `engine`, that is a **FAIL** (engine mismatch / cross-engine leak — the build mixed engines).
+
+The Step-1 contracts below are **engine-aware**: apply the PySpark column for `synapse_pyspark` notebooks, the Python column for `jupyter_python` notebooks. The layer *semantics* are engine-independent (bronze = append-only + metadata; silver = read_bronze-only + overwrite); only the *idioms* differ.
+
 ## Step 1 — Static validation (always runs)
 
 For each notebook in Section 9:
 
-### Check 1.1 — Valid JSON
+### Check 1.1 — Valid JSON + kernel discriminator
 
 Read the .ipynb file. Confirm:
 - File exists at the registered path
 - Parses as JSON
 - Has `nbformat: 4`, non-empty `cells: [...]`, `metadata.dependencies.lakehouse` present
+- **Kernel discriminator matches the engine (positive assertion):**
+  - **Python notebook** → `metadata.microsoft.language_group == "jupyter_python"` MUST be present. A Python-engine notebook **missing** `jupyter_python` (e.g. only `kernel_info.name: jupyter` with no `microsoft.language_group`) → **FAIL** (Fabric may not register it as a Python notebook). Also assert `metadata.kernel_info.name == "jupyter"`.
+  - **PySpark notebook** → `metadata.kernel_info.name == "synapse_pyspark"`.
 
-### Check 1.2 — Layer-specific contracts
+### Check 1.2 — Layer-specific contracts (engine-aware)
+
+#### PySpark engine (`synapse_pyspark` notebooks)
 
 **Bronze notebooks (`nb_bronze_*.ipynb`):**
 - Lakehouse binding is `lh_bronze` (or whatever the bronze lakehouse name is from Section 0)
 - Has the standard 6-cell structure (Header / Parameters / Imports / Read Source / Add Metadata / Write Delta / Validation) — flexible on order, but all six must be present
-- Write mode is `append`
+- Write mode is `append` (`.mode("append")` + `.saveAsTable(...)`)
 - `mergeSchema: true`
 - Calls `add_bronze_metadata()` or equivalent inline metadata addition
 
@@ -77,9 +93,41 @@ Read the .ipynb file. Confirm:
   - `abfss://`, `wasbs://`
   - `Files/`
   Any match → FAIL (silver contract violation)
-- Write mode is `overwrite`
+- Write mode is `overwrite` (`.mode("overwrite")` + `.saveAsTable(...)`)
 - `overwriteSchema: true`
 - Calls `add_silver_metadata()` or equivalent
+- **Leak guard:** NO Python-engine idioms — `write_deltalake(`, `import polars`, `pl.read_*` → FAIL (PySpark notebook running single-node delta-rs).
+
+#### Python engine (`jupyter_python` notebooks, `engine=python`)
+
+**Bronze notebooks (`nb_bronze_*.ipynb`):**
+- Lakehouse binding is `lh_bronze`
+- Write idiom is **delta-rs append**: `write_deltalake(table_path(...), <arrow>, mode="append", schema_mode="merge")`. The write target MUST go through `table_path(...)` (no hard-coded `Tables/...`). → FAIL if `mode="append"` or `schema_mode="merge"` is absent, or `saveAsTable` is used.
+- Metadata columns added — `_load_timestamp` (UTC), `_source_file`, `_load_id` — via `add_bronze_metadata()` or the inline `pl.lit(...)` idiom.
+- Bronze MAY read source files (`pl.read_csv/parquet`, `glob` of the `/lakehouse/default/Files/...` mount) — bronze is the read layer.
+- **Leak guard:** NO Spark idioms — `spark.`, `F.col`/`F.`, `import pyspark`, `.saveAsTable(`, `.withColumnRenamed(` → FAIL (no Spark session in a single-node Python notebook).
+
+**Silver notebooks (`nb_silver_*.ipynb`):**
+- Lakehouse binding is `lh_silver`
+- Reads ONLY via `read_bronze("...")` — grep the notebook source for forbidden external-read patterns (the bronze-only contract is **preserved, never weakened**, for Python):
+  - `pl.read_csv(`, `pl.read_parquet(`, `pl.read_ndjson(`, `pl.scan_csv(`, `pl.scan_parquet(`, `pl.scan_delta(`
+  - `pl.read_delta(` in the silver body (it would bypass `read_bronze`, which itself wraps `pl.read_delta(table_path(...))` inside the utilities notebook)
+  - `os.walk(`, `glob.glob(` (raw file discovery)
+  - `pd.read_*`
+  - `abfss://`, `wasbs://`, `Files/`
+  Any match → FAIL (silver contract violation). A `read_bronze(` call MUST be present.
+- Write idiom is **delta-rs overwrite**: `write_deltalake(table_path(...), <arrow>, mode="overwrite", schema_mode="overwrite")`. → FAIL if `mode="overwrite"` or `schema_mode="overwrite"` is absent, or `saveAsTable` is used.
+- Drops bronze metadata + calls `add_silver_metadata()` or equivalent.
+- **Leak guard:** NO Spark idioms (as above) → FAIL.
+
+**Row-count check (Python engine, Step 2 below):** count rows via **delta-rs / duckdb** — never a Spark `.count()` (no Spark session exists single-node):
+
+```python
+from deltalake import DeltaTable
+DeltaTable(table_path("bronze_<source>")).to_pyarrow_dataset().count_rows()
+```
+
+(or `duckdb.sql("SELECT count(*) FROM delta_scan(...)")`). The Fabric lakehouse-reader SQL-endpoint path also works for runtime counts. Never assume a Spark session exists on the Python path.
 
 ### Check 1.3 — Risk isolation cells
 
@@ -106,6 +154,8 @@ python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-lakehouse-reader/scripts/query_fabri
 Parse the row count. Zero rows → FAIL. Below `expected_min_rows` from plan (if set) → WARN.
 
 For silver: target is `silver_<entity>` instead of `bronze_<source>`.
+
+The SQL-endpoint query above is engine-agnostic. If you instead count from inside a runtime context, use the **engine-appropriate** path: PySpark notebooks may use `spark.table(...).count()`; **Python (`jupyter_python`) notebooks must NOT** — use delta-rs (`DeltaTable(table_path(...)).to_pyarrow_dataset().count_rows()`) or duckdb (`delta_scan`), since no Spark session exists single-node.
 
 ## Step 3 — Write Section 10
 

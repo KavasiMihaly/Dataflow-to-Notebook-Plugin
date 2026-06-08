@@ -1,6 +1,6 @@
 # Pipeline Workflow — Process Map
 
-**Last updated:** 2026-05-02
+**Last updated:** 2026-06-08
 **Applies to:** `fabric-dataflow-migration-toolkit` plugin v0.x (pre-stable)
 
 This document is the authoritative narrative of the 13-stage migration pipeline. The orchestrator's `agent.md` is the implementation; this is the process map and contract reference for plugin contributors.
@@ -26,6 +26,32 @@ claude --agent fabric-dataflow-migration-toolkit:fabric-migration-orchestrator:f
 ```
 
 The orchestrator runs in the user's working directory. All paths are relative to cwd unless absolute. It must be the main thread because it delegates to 5 specialist subagents — and Claude Code's hierarchy rules prevent a subagent from spawning further subagents.
+
+## Notebook engine toggle (`pyspark` | `python`)
+
+A migration emits notebooks for **one** compute engine, chosen **once at the start of the run** via the `notebook_engine` userConfig or the orchestrator's `--engine python|pyspark` flag (the flag wins). **No mixing** — one engine per project. The choice is resolved at **Stage 1**, recorded in Section 0 of `migration-design.md` and in `0 - Architecture Setup/project-config.yml` (`project.engine`), threaded into every builder prompt (Stages 8/9), and surfaced in the Stage 7 approval text (with the single-node caveat for `python`). `pyspark` is the default and the regression baseline.
+
+### Decision matrix
+
+| | `pyspark` (default) | `python` |
+|---|---|---|
+| Kernel | `synapse_pyspark` (Spark cluster) | `jupyter` (`microsoft.language_group: jupyter_python`) |
+| Runtime | Distributed Spark | Single-node (2 vCore / 16 GB) |
+| Libraries | PySpark / Spark SQL | polars / duckdb / delta-rs |
+| Best for | Larger / distributed workloads | Low-volume (sub-gigabyte) — faster start, lower cost |
+| Guidance | [Fabric notebook selection guide](https://learn.microsoft.com/en-us/fabric/data-engineering/fabric-notebook-selection-guide) | same |
+
+The migration holds only M code (never source rows), so there is **no data-driven engine advisory** — the toggle is the user's call. The single-node memory caveat lives in docs + the Stage-7 approval text, **not** as a gate.
+
+### Python engine limitations (bake into the engine choice)
+
+- **Single-node memory** — one ~16 GB container, no distributed fan-out. Comfortable up to ~1 GB of working data; multi-GB transforms (especially large joins) risk OOM. Pick `pyspark` for anything that needs a cluster.
+- **No env vars / no Environment item / no library item** — packages not pre-installed must come via inline `%pip install`; config a Spark path would read from an Environment must be inlined or read from `project-config.yml`.
+- **Some Delta features unsupported** — Delta I/O via delta-rs + polars is not the full Delta spec. **V-Order / Native Execution Engine (NEE) / Vegas cache are Spark-only (N-A in Python)** — write-time performance optimizations, not correctness; tables stay queryable and can be V-Order-optimized later by a Spark `OPTIMIZE` job or the SQL endpoint's background optimization.
+
+The engine-aware gates (Stage 8/9 hook + Stage 12 validator) enforce the **per-engine** contract — Python silver still must be `read_bronze`-only, Python bronze still `write_deltalake(... append ...)` — and catch cross-engine idiom leakage. The `reference/m-conversion-risk-catalog.md` tags every M risk with a `**Python:**` applicability note (ease / worsen / N-A / unchanged) describing how each mitigation shifts on the single-node engine.
+
+> **Status (2026-06-08):** the Python builders + the M→Python converter emit Python-kernel notebooks; what remains is the **manual, offline-for-now live Fabric round-trip** (deploy + confirm the notebooks register as Python and that `table_path()` writes register the Delta tables). `pyspark` stays the default.
 
 ## User interaction budget
 
