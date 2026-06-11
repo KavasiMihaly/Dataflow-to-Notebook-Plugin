@@ -551,7 +551,7 @@ Task(
 
   Write '3 - Notebooks/bronze/nb_bronze_<query_snake>.ipynb' as valid Jupyter JSON:
   - engine=pyspark → synapse_pyspark kernel; existing PySpark idioms; lh_bronze binding.
-  - engine=python → jupyter kernel (microsoft.language_group 'jupyter_python'); polars + delta-rs; metadata via datetime.now(timezone.utc)/notebookutils.runtime.context; write via write_deltalake(table_path(...), arrow, mode='append', schema_mode='merge'); lh_bronze binding.
+  - engine=python → jupyter kernel (microsoft.language_group 'jupyter_python'); polars + delta-rs; metadata via datetime.now(timezone.utc)/notebookutils.runtime.context; write via write_deltalake(table_path(...), arrow, mode='append', schema_mode='merge', **DELTA_WRITE_KWARGS) — the DELTA_WRITE_KWARGS shim from nb_utils_config is REQUIRED with schema_mode (rust-writer compat); lh_bronze binding.
 
   Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status: 'success'|'failed', notebook_path, conforms_to_plan: bool, deviations: [], warnings: [], errors: [], risks_isolated: [risk_ids] }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,
@@ -587,7 +587,7 @@ Task(
 
   Write '3 - Notebooks/silver/nb_silver_<query_snake>.ipynb' as valid Jupyter JSON with lh_silver lakehouse binding:
   - engine=pyspark → synapse_pyspark kernel; existing PySpark idioms.
-  - engine=python → jupyter kernel (jupyter_python); %run nb_utils_config (bare item name, not a repo path); df = read_bronze('<src>'); polars transforms; drop bronze metadata then add_silver_metadata; write via write_deltalake(table_path(...), arrow, mode='overwrite', schema_mode='overwrite').
+  - engine=python → jupyter kernel (jupyter_python); %run nb_utils_config (bare item name, not a repo path); df = read_bronze('<src>'); polars transforms; drop bronze metadata then add_silver_metadata; write via write_deltalake(table_path(...), arrow, mode='overwrite', schema_mode='overwrite', **DELTA_WRITE_KWARGS) — the DELTA_WRITE_KWARGS shim from nb_utils_config is REQUIRED with schema_mode (rust-writer compat).
 
   Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,

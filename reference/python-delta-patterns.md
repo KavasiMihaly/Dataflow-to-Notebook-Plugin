@@ -49,6 +49,34 @@ logical table** — it shows under an **"Unidentified"** folder. Causes & fixes:
    pipeline that writes bronze then reads it in silver in the **same run**. The
    bronze→silver round-trip test (Slice 4) exists specifically to catch this.
 
+## `schema_mode` needs the rust writer (the `DELTA_WRITE_KWARGS` shim)
+
+Any `write_deltalake(...)` call that passes `schema_mode` **must** also spread
+`**DELTA_WRITE_KWARGS` (defined in `nb_utils_config`, available after
+`%run nb_utils_config`). On **delta-rs < 0.18** the default *pyarrow* writer
+rejects `schema_mode`:
+
+```
+ValueError: schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust
+```
+
+The shim injects `engine="rust"` on those runtimes and **nothing** on delta-rs
+>= 0.18 (which made rust the only writer and later removed the `engine` kwarg —
+passing it there raises `TypeError`). So a hard-coded `engine="rust"` is *not*
+forward-safe; always use the shim:
+
+```python
+# in nb_utils_config (owns the gotcha in ONE place):
+import deltalake
+def _delta_write_kwargs() -> dict:
+    try:
+        major, minor = (int(p) for p in deltalake.__version__.split(".")[:2])
+    except Exception:
+        return {}
+    return {"engine": "rust"} if (major, minor) < (0, 18) else {}
+DELTA_WRITE_KWARGS = _delta_write_kwargs()
+```
+
 ## Bronze write — append + schema merge
 
 Bronze is **append-only**. Schema evolution allowed (`schema_mode="merge"`).
@@ -61,11 +89,12 @@ write_deltalake(
     df.to_arrow(),                 # polars -> Arrow (delta-rs writes Arrow)
     mode="append",
     schema_mode="merge",           # PySpark equivalent: mergeSchema=true
+    **DELTA_WRITE_KWARGS,          # rust-writer shim — REQUIRED with schema_mode
 )
 ```
 
 Equivalent via polars: `df.write_delta(table_path("bronze_customers"),
-mode="append", delta_write_options={"schema_mode": "merge"})`.
+mode="append", delta_write_options={"schema_mode": "merge", **DELTA_WRITE_KWARGS})`.
 
 ## Silver write — overwrite + schema overwrite
 
@@ -77,6 +106,7 @@ write_deltalake(
     df.to_arrow(),
     mode="overwrite",
     schema_mode="overwrite",       # PySpark equivalent: overwriteSchema=true
+    **DELTA_WRITE_KWARGS,          # rust-writer shim — REQUIRED with schema_mode
 )
 ```
 

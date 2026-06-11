@@ -201,6 +201,55 @@ def test_silver_python_overwrite_schema() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 3b. write spreads the rust-writer shim (**DELTA_WRITE_KWARGS)
+# --------------------------------------------------------------------------- #
+def test_silver_python_write_has_delta_kwargs_shim() -> None:
+    """Silver's write_deltalake passes schema_mode="overwrite", so it MUST also
+    spread **DELTA_WRITE_KWARGS (from nb_utils_config). On delta-rs < 0.18 the
+    pyarrow writer rejects schema_mode at runtime; the shim adds engine="rust"
+    there and nothing on newer delta-rs. A literal engine="rust" is rejected
+    (breaks on delta-rs >= 0.18). Regression for the 2026-06-11 runtime error."""
+    if not PY_SILVER_GOLDEN.is_file():
+        _check("Python silver write spreads **DELTA_WRITE_KWARGS", False,
+               detail=f"missing {PY_SILVER_GOLDEN}")
+        return
+    src = _notebook_source(_load_ipynb(PY_SILVER_GOLDEN))
+    has_schema_mode = re.search(r"schema_mode\s*=", src) is not None
+    has_shim = "**DELTA_WRITE_KWARGS" in src
+    no_literal_engine = re.search(r"engine\s*=\s*['\"]rust['\"]", src) is None
+    _check(
+        "Python silver write spreads **DELTA_WRITE_KWARGS (rust-writer compat, no literal engine=)",
+        has_schema_mode and has_shim and no_literal_engine,
+        detail=f"schema_mode={has_schema_mode} shim={has_shim} no_literal_engine={no_literal_engine}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 3c. %run cell is pure (#18 bare name + #19 sole cell content)
+# --------------------------------------------------------------------------- #
+def test_silver_python_run_cell_is_pure() -> None:
+    """The utilities cell must be EXACTLY `%run nb_utils_config` — bare item name
+    (#18) and the sole content of its cell (#19). A comment/preamble in the same
+    cell raises Fabric MagicUsageError; a repo path raises NameError on deploy."""
+    if not PY_SILVER_GOLDEN.is_file():
+        _check("Python silver %run cell is pure (bare name, sole content)", False,
+               detail=f"missing {PY_SILVER_GOLDEN}")
+        return
+    nb = _load_ipynb(PY_SILVER_GOLDEN)
+    run_cells = []
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", "")
+        text = src if isinstance(src, str) else "".join(src)
+        if any(ln.strip().startswith("%run") for ln in text.splitlines()):
+            run_cells.append(text)
+    ok = len(run_cells) == 1 and run_cells[0].strip() == "%run nb_utils_config"
+    _check("Python silver %run cell is pure (bare name, sole content)", ok,
+           detail=f"run_cells={run_cells!r}")
+
+
+# --------------------------------------------------------------------------- #
 # 4. metadata swap — bronze dropped, add_silver_metadata called
 # --------------------------------------------------------------------------- #
 def test_silver_python_metadata_swap() -> None:
@@ -389,6 +438,8 @@ def main() -> int:
     test_silver_python_valid_ipynb()
     test_silver_python_read_bronze_only()
     test_silver_python_overwrite_schema()
+    test_silver_python_write_has_delta_kwargs_shim()
+    test_silver_python_run_cell_is_pure()
     test_silver_python_metadata_swap()
     test_silver_python_no_spark_idioms()
     test_silver_python_passes_structure_hook_python_branch()

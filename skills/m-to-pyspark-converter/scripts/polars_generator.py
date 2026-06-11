@@ -511,11 +511,14 @@ class PolarsGenerator:
             "# builder-overridden default.)",
             'write_mode = "overwrite"  # TODO: builder sets layer write mode',
             'schema_write_mode = "overwrite"  # TODO: builder sets layer schema mode',
+            "# **DELTA_WRITE_KWARGS (from nb_utils_config) adds engine=\"rust\" on delta-rs",
+            "# < 0.18 whose pyarrow writer rejects schema_mode; empty on newer delta-rs.",
             "write_deltalake(",
             "    table_path(target_table),",
             "    df.to_arrow(),",
             "    mode=write_mode,",
             "    schema_mode=schema_write_mode,",
+            "    **DELTA_WRITE_KWARGS,",
             ")",
         ])
 

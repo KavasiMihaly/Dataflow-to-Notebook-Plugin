@@ -185,6 +185,43 @@ def test_utils_defines_required_helpers() -> None:
            not missing, detail=f"missing defs: {missing}")
 
 
+def test_utils_defines_delta_write_kwargs_shim() -> None:
+    """The utilities template must define the version-aware delta-rs write shim
+    (DELTA_WRITE_KWARGS / _delta_write_kwargs) that owns the schema_mode/engine
+    gotcha. Executing the shim must yield engine="rust" for delta-rs < 0.18 and
+    {} for >= 0.18. Regression for the 2026-06-11 pyarrow-engine ValueError."""
+    if not PY_UTILS_TEMPLATE.is_file():
+        _check("Python utils defines the DELTA_WRITE_KWARGS rust-writer shim", False,
+               detail=f"missing {PY_UTILS_TEMPLATE}")
+        return
+    src = _notebook_source(_load_ipynb(PY_UTILS_TEMPLATE))
+    defines_constant = "DELTA_WRITE_KWARGS" in src
+    m = re.search(r"(def\s+_delta_write_kwargs\s*\(.*?)(?=\nDELTA_WRITE_KWARGS|\ndef\s|\Z)",
+                  src, re.DOTALL)
+    if not (defines_constant and m):
+        _check("Python utils defines the DELTA_WRITE_KWARGS rust-writer shim", False,
+               detail=f"constant={defines_constant} shim_def={bool(m)}")
+        return
+
+    # Exec the shim with a stubbed deltalake module to assert both version branches.
+    def _run(version: str) -> dict:
+        ns: dict = {"deltalake": type("M", (), {"__version__": version})()}
+        exec(m.group(1), ns)  # noqa: S102 - controlled template source under test
+        return ns["_delta_write_kwargs"]()
+
+    try:
+        old = _run("0.17.4")     # pyarrow-default era → must inject engine="rust"
+        new = _run("0.18.2")     # rust-only era → must pass nothing
+        newer = _run("1.0.0")    # engine kwarg removed → must pass nothing
+    except Exception as e:  # noqa: BLE001
+        _check("Python utils defines the DELTA_WRITE_KWARGS rust-writer shim", False,
+               detail=f"exec error: {e}")
+        return
+    ok = old == {"engine": "rust"} and new == {} and newer == {}
+    _check("Python utils defines the DELTA_WRITE_KWARGS rust-writer shim", ok,
+           detail=f"0.17={old} 0.18={new} 1.0={newer}")
+
+
 def test_table_path_schema_resolution() -> None:
     """Execute the table_path() helper from the template in isolation and assert
     it resolves both lakehouse modes correctly."""
@@ -284,6 +321,7 @@ def main() -> int:
     test_python_builders_agree_on_metadata_shell()
     test_utils_notebook_valid_ipynb()
     test_utils_defines_required_helpers()
+    test_utils_defines_delta_write_kwargs_shim()
     test_table_path_schema_resolution()
     test_style_guide_bans_fs_ls_for_files()
     test_initializer_python_scaffolds_python_utils()

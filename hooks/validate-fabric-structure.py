@@ -247,6 +247,59 @@ def _validate_engine_leak(scan: str, engine: str) -> str | None:
     return None
 
 
+def _validate_run_cell(content: str) -> str | None:
+    """Return an error if a `%run` magic does not sit ALONE in its own cell.
+
+    Fabric requires a `%run` magic to be the SOLE content of its code cell — it
+    may not share the cell with any other code OR even a comment, or Fabric
+    raises `MagicUsageError: %run cannot run with other code or magic commands`.
+    The target must also be the bare item name (no `/` path) — a repo-relative
+    `%run utilities/nb_utils_config` does not resolve on a flat-workspace deploy
+    and raises NameError on the helpers.
+
+    Per-cell check, so it parses the cells[] array; on an unparseable fragment
+    (Edit) it returns None (defers) — purity can't be judged from a fragment.
+    """
+    try:
+        nb = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(nb, dict) or not isinstance(nb.get("cells"), list):
+        return None
+    for cell in nb["cells"]:
+        if not isinstance(cell, dict) or cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", "")
+        text = src if isinstance(src, str) else "".join(src)
+        lines = text.splitlines()
+        run_lines = [ln for ln in lines if ln.strip().startswith("%run")]
+        if not run_lines:
+            continue
+        # The cell holds a %run magic: every OTHER line must be blank.
+        other = [ln for ln in lines if ln.strip() and not ln.strip().startswith("%run")]
+        if other:
+            return (
+                "`%run` magic must be the SOLE content of its cell (no comment, "
+                "label, or other code in the same cell), or Fabric raises "
+                "MagicUsageError: %run cannot run with other code or magic commands. "
+                f"Offending cell also contains: {other[0].strip()!r}. "
+                "Put any label in a separate markdown cell."
+            )
+        if len(run_lines) > 1:
+            return (
+                "A code cell contains more than one `%run` magic; each `%run` must "
+                "be alone in its own cell (Fabric MagicUsageError otherwise)."
+            )
+        target = run_lines[0].strip()[len("%run"):].strip()
+        if "/" in target or "\\" in target:
+            return (
+                f"`%run {target}` uses a path-style target; Fabric resolves `%run` "
+                "by bare workspace item name. Use `%run nb_utils_config` (deploys "
+                "land notebooks as flat items, so a repo path yields NameError)."
+            )
+    return None
+
+
 def _validate_ipynb_shape(content: str, path: str) -> str | None:
     """Return error if .ipynb file is not valid Jupyter JSON, else None."""
     try:
@@ -301,6 +354,13 @@ def main() -> int:
         # Validate .ipynb shape
         if path.endswith(".ipynb") and content:
             err = _validate_ipynb_shape(content, path)
+            if err:
+                _emit_decision("block", err)
+                return 0
+
+            # `%run` cell purity (both engines) — the magic must be the sole
+            # content of its cell, with a bare item-name target (#18 + #19).
+            err = _validate_run_cell(content)
             if err:
                 _emit_decision("block", err)
                 return 0

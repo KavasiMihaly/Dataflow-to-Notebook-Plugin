@@ -151,8 +151,12 @@ Emitted with `--target python`. Source of truth: the research §4 translation ta
 
 ```python
 write_deltalake(table_path(target_table), df.to_arrow(),
-                mode="overwrite", schema_mode="overwrite")
+                mode="overwrite", schema_mode="overwrite", **DELTA_WRITE_KWARGS)
 ```
+
+`**DELTA_WRITE_KWARGS` (from `nb_utils_config`) is required wherever `schema_mode`
+is passed — it adds `engine="rust"` on delta-rs < 0.18 (whose pyarrow writer
+rejects `schema_mode`) and nothing on newer delta-rs.
 
 Reads/writes go through a `table_path()` resolver (provided by the Python utilities
 notebook) so the schema-enabled-vs-classic lakehouse path is handled in one place.

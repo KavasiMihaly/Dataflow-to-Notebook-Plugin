@@ -100,9 +100,12 @@ Read the .ipynb file. Confirm:
 
 #### Python engine (`jupyter_python` notebooks, `engine=python`)
 
+**`%run` cell purity (both bronze and silver):** the cell that invokes `%run nb_utils_config` MUST contain that magic as its **sole** line — no comment, label, or blank-line preamble in the same code cell. Fabric treats any other content (even a `# ---` comment) as "other code" and raises `MagicUsageError: %run cannot run with other code or magic commands`. Also the target MUST be the **bare item name** `nb_utils_config`, never a repo path like `utilities/nb_utils_config` (flat-workspace deploy → `NameError`). → FAIL if the `%run` cell holds anything besides the bare magic, or uses a path-style target.
+
 **Bronze notebooks (`nb_bronze_*.ipynb`):**
 - Lakehouse binding is `lh_bronze`
-- Write idiom is **delta-rs append**: `write_deltalake(table_path(...), <arrow>, mode="append", schema_mode="merge")`. The write target MUST go through `table_path(...)` (no hard-coded `Tables/...`). → FAIL if the write mode does not resolve to `append`, or `schema_mode="merge"` is absent, or `saveAsTable` is used. **Accept a parameterised mode** — builders legitimately write `mode=load_mode` where `load_mode = "append"` is assigned earlier; resolve the variable before judging (only a mode resolving to `overwrite` or something other than `append` is a FAIL).
+- Write idiom is **delta-rs append**: `write_deltalake(table_path(...), <arrow>, mode="append", schema_mode="merge", **DELTA_WRITE_KWARGS)`. The write target MUST go through `table_path(...)` (no hard-coded `Tables/...`). → FAIL if the write mode does not resolve to `append`, or `schema_mode="merge"` is absent, or `saveAsTable` is used. **Accept a parameterised mode** — builders legitimately write `mode=load_mode` where `load_mode = "append"` is assigned earlier; resolve the variable before judging (only a mode resolving to `overwrite` or something other than `append` is a FAIL).
+- **`schema_mode` rust-writer shim:** whenever `schema_mode=` is passed, the call MUST also spread `**DELTA_WRITE_KWARGS` (defined in `nb_utils_config`). Its absence → FAIL: on delta-rs < 0.18 the pyarrow writer raises `schema_mode 'merge' is not supported in pyarrow engine`, so the write breaks at runtime. (A literal `engine="rust"` is NOT an accepted substitute — it breaks on delta-rs ≥ 0.18 where the kwarg was removed.)
 - Metadata columns added — `_load_timestamp` (UTC), `_source_file`, `_load_id` — via `add_bronze_metadata()` or the inline `pl.lit(...)` idiom.
 - Bronze MAY read source files (`pl.read_csv/parquet`, `glob` of the `/lakehouse/default/Files/...` mount) — bronze is the read layer.
 - **Leak guard:** NO Spark idioms — `spark.`, `F.col`/`F.`, `import pyspark`, `.saveAsTable(`, `.withColumnRenamed(` → FAIL (no Spark session in a single-node Python notebook).
@@ -116,7 +119,7 @@ Read the .ipynb file. Confirm:
   - `pd.read_*`
   - `abfss://`, `wasbs://`, `Files/`
   Any match → FAIL (silver contract violation). A `read_bronze(` call MUST be present.
-- Write idiom is **delta-rs overwrite**: `write_deltalake(table_path(...), <arrow>, mode="overwrite", schema_mode="overwrite")`. → FAIL if the write mode does not resolve to `overwrite`, or `schema_mode="overwrite"` is absent, or `saveAsTable` is used. **Accept a parameterised mode** — `mode=write_mode` with `write_mode = "overwrite"` assigned earlier is fine; resolve the variable before judging.
+- Write idiom is **delta-rs overwrite**: `write_deltalake(table_path(...), <arrow>, mode="overwrite", schema_mode="overwrite", **DELTA_WRITE_KWARGS)`. → FAIL if the write mode does not resolve to `overwrite`, or `schema_mode="overwrite"` is absent, or `**DELTA_WRITE_KWARGS` is absent (same rust-writer shim requirement as bronze — see above), or `saveAsTable` is used. **Accept a parameterised mode** — `mode=write_mode` with `write_mode = "overwrite"` assigned earlier is fine; resolve the variable before judging.
 - Drops bronze metadata + calls `add_silver_metadata()` or equivalent.
 - **Leak guard:** NO Spark idioms (as above) → FAIL.
 

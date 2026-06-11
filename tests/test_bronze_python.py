@@ -198,6 +198,60 @@ def test_bronze_python_append_via_variable() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Test 3c — schema_mode write spreads the rust-writer shim (**DELTA_WRITE_KWARGS)
+# --------------------------------------------------------------------------- #
+def test_bronze_python_write_has_delta_kwargs_shim() -> None:
+    """Any write_deltalake passing schema_mode MUST also spread
+    **DELTA_WRITE_KWARGS. On delta-rs < 0.18 the pyarrow writer raises
+    "schema_mode 'merge' is not supported in pyarrow engine. Use engine=rust";
+    the shim (from nb_utils_config) injects engine="rust" there and nothing on
+    delta-rs >= 0.18 (which removed the kwarg). Regression for the runtime
+    ValueError reported 2026-06-11."""
+    if not PY_BRONZE.is_file():
+        _check("Python bronze write spreads **DELTA_WRITE_KWARGS", False,
+               detail="missing golden")
+        return
+    src = _code_source(_load_ipynb(PY_BRONZE))
+    has_schema_mode = re.search(r"schema_mode\s*=", src) is not None
+    has_shim = "**DELTA_WRITE_KWARGS" in src
+    # A literal engine="rust" is NOT forward-safe (breaks on delta-rs >= 0.18).
+    no_literal_engine = re.search(r"engine\s*=\s*[\"']rust[\"']", src) is None
+    _check(
+        "Python bronze write spreads **DELTA_WRITE_KWARGS (rust-writer compat, no literal engine=)",
+        has_schema_mode and has_shim and no_literal_engine,
+        detail=f"schema_mode={has_schema_mode} shim={has_shim} no_literal_engine={no_literal_engine}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Test 3d — %run cell is pure (#18 bare name + #19 sole cell content)
+# --------------------------------------------------------------------------- #
+def test_bronze_python_run_cell_is_pure() -> None:
+    """The utilities cell must be EXACTLY `%run nb_utils_config` — bare item name
+    (#18) and the sole content of its cell (#19). A comment/preamble in the same
+    cell raises Fabric MagicUsageError; a repo path raises NameError on deploy."""
+    if not PY_BRONZE.is_file():
+        _check("Python bronze %run cell is pure (bare name, sole content)", False,
+               detail="missing golden")
+        return
+    nb = _load_ipynb(PY_BRONZE)
+    run_cells = []
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", "")
+        text = src if isinstance(src, str) else "".join(src)
+        if any(ln.strip().startswith("%run") for ln in text.splitlines()):
+            run_cells.append(text)
+    ok = (
+        len(run_cells) == 1
+        and run_cells[0].strip() == "%run nb_utils_config"
+    )
+    _check("Python bronze %run cell is pure (bare name, sole content)", ok,
+           detail=f"run_cells={run_cells!r}")
+
+
+# --------------------------------------------------------------------------- #
 # Test 4 — metadata columns
 # --------------------------------------------------------------------------- #
 def test_bronze_python_metadata_columns() -> None:
@@ -342,6 +396,8 @@ def main() -> int:
     test_bronze_python_no_spark_idioms()
     test_bronze_python_append_schema_merge()
     test_bronze_python_append_via_variable()
+    test_bronze_python_write_has_delta_kwargs_shim()
+    test_bronze_python_run_cell_is_pure()
     test_bronze_python_metadata_columns()
     test_bronze_python_uses_table_path()
     test_bronze_python_passes_structure_hook()

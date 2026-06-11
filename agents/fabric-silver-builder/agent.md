@@ -187,7 +187,9 @@ Every silver notebook follows this exact cell layout:
 
 ### Cell Templates
 
-**Cell 0 — %run utility config** (bare notebook-item name — **never** a repo path like `utilities/nb_utils_config`; Fabric `%run` resolves by workspace item name and deploys land notebooks as flat items, so a path-style target yields `NameError` on the helpers):
+**Cell 0 — %run utility config.** Two hard rules, both enforced by Fabric at runtime:
+1. **Bare notebook-item name** — `%run nb_utils_config`, **never** a repo path like `utilities/nb_utils_config`. Fabric `%run` resolves by workspace item name and deploys land notebooks as flat items, so a path-style target yields `NameError` on the helpers.
+2. **`%run` must be the SOLE content of the cell** — no comment, no label, no blank-line preamble, nothing else in the `source`. Fabric treats even a leading `# ---` comment as "other code" and raises `MagicUsageError: %run cannot run with other code or magic commands`. If you want a label, put it in a **separate markdown cell above** — never in this code cell.
 ```json
 {"cell_type": "code", "source": ["%run nb_utils_config"], "metadata": {}, "outputs": [], "execution_count": null}
 ```
@@ -371,7 +373,7 @@ at deploy time).
 | 3 | Read Bronze | `df_raw = read_bronze(BRONZE_SOURCE)` — the ONLY read path |
 | 4+ | Transform | rename / cast / decode / null-handle / dedup / unpivot / join (polars) |
 | N-2 | Metadata swap | `df_silver = add_silver_metadata(df_clean)` |
-| N-1 | Write Delta | `write_deltalake(table_path(TABLE_NAME), df_silver.to_arrow(), mode="overwrite", schema_mode="overwrite")` |
+| N-1 | Write Delta | `write_deltalake(table_path(TABLE_NAME), df_silver.to_arrow(), mode="overwrite", schema_mode="overwrite", **DELTA_WRITE_KWARGS)` (the `**DELTA_WRITE_KWARGS` from `nb_utils_config` is **required** with `schema_mode` — see Write idiom) |
 | N | Validation | `validate_row_count(TABLE_NAME, min_rows=1)` |
 
 ### Read pattern (bronze-only — Python)
@@ -467,8 +469,16 @@ write_deltalake(
     df_silver.to_arrow(),
     mode="overwrite",
     schema_mode="overwrite",
+    **DELTA_WRITE_KWARGS,       # delta-rs engine shim from nb_utils_config — REQUIRED with schema_mode
 )
 ```
+
+**`**DELTA_WRITE_KWARGS` is mandatory whenever `schema_mode` is passed.** It comes
+from `nb_utils_config` (`%run nb_utils_config`). On delta-rs < 0.18 the default
+pyarrow writer raises `ValueError: schema_mode 'overwrite' is not supported in
+pyarrow engine. Use engine=rust`; the shim injects `engine="rust"` there and
+nothing on newer delta-rs (which removed the `engine` kwarg). Omitting it makes
+the silver write fail at runtime in Fabric.
 
 This is the polars/delta-rs analogue of the PySpark `mode("overwrite") +
 overwriteSchema=true + saveAsTable` idiom. NEVER use `mode="append"` in silver.
@@ -567,7 +577,7 @@ Your silver notebook is complete when:
 - Multiple cells in `cells` array (one per logical section)
 - Each cell's `source` is `List[str]` (array of line strings)
 - Lakehouse binding set to `lh_silver` in `metadata.dependencies.lakehouse`
-- `%run nb_utils_config` cell present (bare item name — not `utilities/nb_utils_config`)
+- `%run nb_utils_config` cell present — bare item name (not `utilities/nb_utils_config`) **and the sole content of its cell** (no comment/preamble, or Fabric raises `MagicUsageError`)
 - Data read via `read_bronze()` — no external sources
 - Columns renamed to snake_case
 - Types cast appropriately

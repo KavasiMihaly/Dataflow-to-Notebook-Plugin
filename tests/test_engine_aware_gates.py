@@ -374,6 +374,43 @@ def test_cross_engine_leak_python_in_pyspark() -> None:
     )
 
 
+def test_hook_run_cell_purity() -> None:
+    """#19 — a `%run` magic must be the SOLE content of its cell (no comment or
+    other code), and the target must be the bare item name (#18). The hook must
+    BLOCK a comment-in-run-cell and a path-style %run, and ALLOW a bare run cell."""
+    # (a) Comment in the same cell as %run → Fabric MagicUsageError → BLOCK.
+    bad_comment = _make_nb("python", [
+        "# --- Shared Utilities ---\n%run nb_utils_config",
+        'df = read_bronze("customers")',
+        'write_deltalake(table_path("silver_customers"), df.to_arrow(), '
+        'mode="overwrite", schema_mode="overwrite", **DELTA_WRITE_KWARGS)',
+    ])
+    d_comment = _run_hook("p/3 - Notebooks/silver/nb_silver_a.ipynb", bad_comment)
+
+    # (b) Path-style %run target (repo path) → flat-deploy NameError → BLOCK.
+    bad_path = _make_nb("python", [
+        "%run utilities/nb_utils_config",
+        'df = read_bronze("customers")',
+    ])
+    d_path = _run_hook("p/3 - Notebooks/silver/nb_silver_b.ipynb", bad_path)
+
+    # (c) Bare %run alone in its cell → ALLOWED (not blocked for this reason).
+    good = _make_nb("python", [
+        "%run nb_utils_config",
+        'df = read_bronze("customers")',
+        'write_deltalake(table_path("silver_customers"), df.to_arrow(), '
+        'mode="overwrite", schema_mode="overwrite", **DELTA_WRITE_KWARGS)',
+    ])
+    d_good = _run_hook("p/3 - Notebooks/silver/nb_silver_c.ipynb", good)
+
+    _check(
+        "%run cell purity: comment-in-run-cell + path-style %run BLOCKED, bare %run ALLOWED",
+        _blocked(d_comment) and _blocked(d_path) and not _blocked(d_good),
+        detail=f"comment_blocked={_blocked(d_comment)} path_blocked={_blocked(d_path)} "
+               f"bare_blocked={_blocked(d_good)}",
+    )
+
+
 def main() -> int:
     test_hook_pyspark_silver_unchanged()
     test_hook_python_silver_external_read_blocked()
@@ -383,6 +420,7 @@ def main() -> int:
     test_validator_python_write_idiom()
     test_cross_engine_leak_spark_in_python()
     test_cross_engine_leak_python_in_pyspark()
+    test_hook_run_cell_purity()
 
     print()
     if FAILURES:

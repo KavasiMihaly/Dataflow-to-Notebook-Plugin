@@ -245,12 +245,12 @@ no `import pyspark` / `from pyspark`, no `.withColumn(...)`. There is no `F` and
 | Cell | Purpose | Content |
 |------|---------|---------|
 | Header | markdown | name, purpose, engine: python, source, target (append-only) |
-| 1 | Shared helpers | `%run nb_utils_config` (gives `table_path`, `add_bronze_metadata`, `validate_row_count`) — **bare notebook-item name, never a repo path** like `utilities/nb_utils_config`; Fabric `%run` resolves by workspace item name, and deploys land notebooks as flat items |
+| 1 | Shared helpers | `%run nb_utils_config` (gives `table_path`, `add_bronze_metadata`, `validate_row_count`) — **bare notebook-item name, never a repo path** like `utilities/nb_utils_config`; Fabric `%run` resolves by workspace item name, and deploys land notebooks as flat items. **This cell must contain ONLY `%run nb_utils_config`** — no comment/label/preamble, or Fabric raises `MagicUsageError: %run cannot run with other code`. Put any label in a separate markdown cell. |
 | 2 | Imports | `os`, `glob`, `datetime`/`timezone`, `polars as pl`, `from deltalake import write_deltalake`, `notebookutils` |
 | 3 | Parameters | `source_name`, `source_format`, mount `source_path`, `load_mode = "append"` |
 | 4 | Read source | glob the mount + `pl.read_csv`/`read_parquet`/`read_ndjson`; assert files found |
 | 5 | Add metadata | `_load_timestamp`, `_source_file`, `_load_id` (see below) |
-| 6 | Write to Delta | `write_deltalake(table_path(...), arrow, mode="append", schema_mode="merge")` |
+| 6 | Write to Delta | `write_deltalake(table_path(...), arrow, mode="append", schema_mode="merge", **DELTA_WRITE_KWARGS)` (the `**DELTA_WRITE_KWARGS` from `nb_utils_config` is **required** with `schema_mode` — see Write idiom) |
 | 7 | Validation | `validate_row_count(f"bronze_{source_name}", min_rows=1)` |
 
 **Metadata columns (literals — no per-row Spark UDFs):**
@@ -287,8 +287,16 @@ write_deltalake(
     df_bronze.to_arrow(),       # polars -> Arrow (delta-rs writes Arrow)
     mode="append",              # bronze is append-only
     schema_mode="merge",        # PySpark equivalent: mergeSchema=true
+    **DELTA_WRITE_KWARGS,       # delta-rs engine shim (see below) — REQUIRED with schema_mode
 )
 ```
+
+**`**DELTA_WRITE_KWARGS` is mandatory on any `write_deltalake` call that passes
+`schema_mode`.** It comes from `nb_utils_config` (`%run nb_utils_config`). On
+delta-rs < 0.18 the default pyarrow writer raises `ValueError: schema_mode 'merge'
+is not supported in pyarrow engine. Use engine=rust`; the shim injects
+`engine="rust"` there and nothing on newer delta-rs (where the `engine` kwarg was
+removed). Omitting it makes the bronze write fail at runtime in Fabric.
 
 **Never** hard-code `Tables/...`; always resolve through `table_path()`. **Never**
 emit a connection string/secret — use `notebookutils.credentials.getSecret(akv,
