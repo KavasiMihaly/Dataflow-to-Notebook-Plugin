@@ -108,6 +108,14 @@ pl.when(pl.col("Ofsted Rating")=="Outstanding").then(pl.lit(1))
 **Files (if pursued):** `agents/migration-analyst/agent.md` (layer assignment), both builders, possibly the orchestrator Section 6.
 **Tests:** TBD after the design decision.
 
+### IMP-7 — Bronze builder defaults source read to `parquet`, ignores `Csv.Document`  **[Med]** — ✅ DONE (2026-06-08)
+
+**Problem (surfaced by the 0.6.0 namespaced-builder re-test):** both `Schools` and `Ofsted Rating` source M ingest a **CSV** (`Csv.Document(..., [Delimiter=",", Encoding=65001])`), yet the real bronze builder emitted `source_format = "parquet"` + `pl.read_parquet(source_path)`. The generated bronze notebook would fail at runtime against the actual CSV files. Pre-existing bronze-builder behaviour (the `source_format = "{format}"` template placeholder had no rule telling the builder to derive the format from the M), exposed once the builder followed the template literally. Affects **both engines** (the PySpark `spark.read.format(source_format)` cell has the same placeholder). The deterministic converter (`_gen_source` in `polars_generator.py`/`pyspark_generator.py`) already maps `Csv.Document → read_csv` correctly — no converter change needed.
+
+**Fix:** added a **"Source-format detection (derive from the M — never default)"** rule to `agents/fabric-bronze-builder/agent.md` (engine-agnostic, in Bronze Layer Principles) mapping the M document-parser step to the read idiom (`Csv.Document → csv`, `Parquet.Document → parquet`, `Json.Document → json`, `Excel.Workbook → excel/flag`), clarifying that file *locators* (`AzureStorage.Blobs`, `SharePoint.Files`, `File.Contents`, `Folder.Files`, `Web.Contents`) only locate bytes — the format comes from the wrapping parser — and a hard rule: **never default `source_format` to parquet; if no parser is recognizable, STOP and flag.** Tightened the PySpark Parameters-cell + Python read-section comments to point at the rule. Carry CSV `Delimiter`/`Encoding`/`PromoteHeaders` options through.
+**Files:** `agents/fabric-bronze-builder/agent.md` (both engine sections).
+**Tests:** agent-instruction change (LLM-driven, not script-unit-testable); validated by re-running the bronze builder on the CSV-sourced samples and confirming `pl.read_csv`/`spark.read.format("csv")` with the right options (see re-test note below).
+
 ---
 
 ## Still deferred (not in this plan)

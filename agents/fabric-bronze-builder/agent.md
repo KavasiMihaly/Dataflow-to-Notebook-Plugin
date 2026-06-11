@@ -90,6 +90,21 @@ Build bronze layer PySpark notebooks that:
 - Join to other tables (that's silver/gold layer)
 - Apply business logic (that's gold layer)
 
+### Source-format detection — derive from the M, NEVER default (both engines)
+
+`source_format` MUST be read from the source M's **document-parser** step, not guessed. The template ships `source_format = "{format}"` as a placeholder — you fill it from the M. **Never default to `parquet`** (this is the IMP-7 defect: a `Csv.Document` source emitted as `read_parquet` fails at runtime).
+
+| M document parser in the source query | `source_format` | Read idiom (Python / PySpark) | Carry these options |
+|---|---|---|---|
+| `Csv.Document(...)` | `csv` | `pl.read_csv` / `spark.read.format("csv")` | `Delimiter` → `separator`/`sep`; `Encoding=65001` → utf-8; header from a `Table.PromoteHeaders` step → `has_header=True` / `.option("header","true")` |
+| `Parquet.Document(...)` | `parquet` | `pl.read_parquet` / `.format("parquet")` | — |
+| `Json.Document(...)` / `Json.FromValue` | `json` | `pl.read_ndjson` (newline-delimited) / `.format("json")` | — |
+| `Excel.Workbook(...)` / `Excel.CurrentWorkbook` | `excel` | needs `fastexcel`/`openpyxl` (Python) or pre-convert to CSV/Parquet (PySpark) — **emit a HIGH RISK review cell** | sheet name, `PromoteAllScalars` |
+
+**File *locators* are not formats.** `AzureStorage.Blobs`, `SharePoint.Files`, `File.Contents`, `Folder.Files`, `Web.Contents`, `Lakehouse.Contents` only locate the bytes — the format always comes from the parser that *wraps* them (e.g. `Csv.Document(AzureStorage.Blobs(...){...}[Content])` is **csv**, not parquet). Read the whole `let` chain to the parser, not just the source connector.
+
+**Hard rule:** if no recognizable document parser is present in the M, STOP and flag for human review rather than guessing a format. Do not silently emit `parquet`.
+
 ## Naming Conventions
 
 **Notebook files**: `nb_bronze_{source_name}.ipynb` (Jupyter JSON — NEVER `.py`; Fabric's notebook deploy API treats `.py` as a single mega-cell — see N1 in plugin_learnings.md)
@@ -129,7 +144,7 @@ The fenced code blocks below represent individual **`.ipynb` cells**, not a sing
 ```python
 # --- Parameters ---
 source_name = "{source_name}"
-source_format = "{format}"  # csv | parquet | json
+source_format = "{format}"  # csv | parquet | json — DERIVE from the M document parser (see "Source-format detection"); never default to parquet
 source_path = "{source_path}"
 load_mode = "append"  # append | overwrite (use append for bronze)
 ```
@@ -262,7 +277,7 @@ df_raw = pl.concat(
 )
 ```
 
-Parquet: `pl.read_parquet(f)`. JSON (newline-delimited): `pl.read_ndjson(f)`.
+Parquet: `pl.read_parquet(f)`. JSON (newline-delimited): `pl.read_ndjson(f)`. **Pick the reader from the M document parser — see "Source-format detection" above; never default to parquet for a `Csv.Document` source.**
 
 **Write idiom (the exact bronze write — append + schema merge, path via `table_path()`):**
 

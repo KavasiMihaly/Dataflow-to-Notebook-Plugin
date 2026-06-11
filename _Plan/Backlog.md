@@ -17,4 +17,5 @@
 | IMP-4 — Align bronze/silver notebook metadata shell | Python engine improvements | `_Plan/python-engine-improvements.md` (§ IMP-4) | — | Done |
 | IMP-5 — Converter `--output FILE` path handling | Python engine improvements | `_Plan/python-engine-improvements.md` (§ IMP-5) | — | Done |
 | IMP-6 — Join-in-bronze vs join-in-silver (design, grill first) | Python engine improvements | `_Plan/python-engine-improvements.md` (§ IMP-6) | — | Backlog (grill before coding) |
+| IMP-7 — Bronze builder defaults source read to parquet, ignores Csv.Document | Python engine improvements | `_Plan/python-engine-improvements.md` (§ IMP-7) | — | Done |
 | Live Fabric round-trip for engine=python (manual, needs workspace) | Python engine | `_Plan/python-notebook-engine.md` (§ Integration pass) | — | Blocked |
