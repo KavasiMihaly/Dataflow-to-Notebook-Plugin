@@ -222,6 +222,35 @@ def test_utils_defines_delta_write_kwargs_shim() -> None:
            detail=f"0.17={old} 0.18={new} 1.0={newer}")
 
 
+def test_add_bronze_metadata_avoids_null_dtype() -> None:
+    """#20 — the utilities add_bronze_metadata helper must type its string lits
+    with dtype=pl.Utf8 and coerce the run id with `or "manual"`, so a None value
+    yields a String column (not a polars Null dtype, which delta-rs rejects on
+    write with SchemaMismatchError: Invalid data type for Delta Lake: Null)."""
+    if not PY_UTILS_TEMPLATE.is_file():
+        _check("add_bronze_metadata types its lits Utf8 + coerces run id", False,
+               detail=f"missing {PY_UTILS_TEMPLATE}")
+        return
+    src = _notebook_source(_load_ipynb(PY_UTILS_TEMPLATE))
+    m = re.search(r"def\s+add_bronze_metadata\s*\(.*?(?=\ndef\s|\Z)", src, re.DOTALL)
+    body = m.group(0) if m else ""
+    source_file_typed = re.search(
+        r'pl\.lit\([^)]*dtype\s*=\s*pl\.Utf8[^)]*\)\.alias\(\s*["\']_source_file["\']\)', body
+    ) is not None
+    load_id_typed = re.search(
+        r'pl\.lit\(\s*load_id\s*,\s*dtype\s*=\s*pl\.Utf8\s*\)\.alias\(\s*["\']_load_id["\']\)', body
+    ) is not None
+    run_id_coerced = re.search(r'currentRunId["\']\s*\)\s*or\s*["\']manual["\']', body) is not None
+    no_get_default = re.search(r'get\(\s*["\']currentRunId["\']\s*,\s*["\']manual["\']\s*\)', body) is None
+    _check(
+        "add_bronze_metadata types its lits Utf8 + coerces run id (no Null dtype)",
+        bool(m) and source_file_typed and load_id_typed and run_id_coerced and no_get_default,
+        detail=f"found={bool(m)} source_file_typed={source_file_typed} "
+               f"load_id_typed={load_id_typed} run_id_coerced={run_id_coerced} "
+               f"no_get_default={no_get_default}",
+    )
+
+
 def test_table_path_schema_resolution() -> None:
     """Execute the table_path() helper from the template in isolation and assert
     it resolves both lakehouse modes correctly."""
@@ -322,6 +351,7 @@ def main() -> int:
     test_utils_notebook_valid_ipynb()
     test_utils_defines_required_helpers()
     test_utils_defines_delta_write_kwargs_shim()
+    test_add_bronze_metadata_avoids_null_dtype()
     test_table_path_schema_resolution()
     test_style_guide_bans_fs_ls_for_files()
     test_initializer_python_scaffolds_python_utils()

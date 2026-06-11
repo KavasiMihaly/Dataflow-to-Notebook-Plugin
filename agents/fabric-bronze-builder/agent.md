@@ -256,11 +256,16 @@ no `import pyspark` / `from pyspark`, no `.withColumn(...)`. There is no `F` and
 **Metadata columns (literals — no per-row Spark UDFs):**
 
 ```python
-load_id = notebookutils.runtime.context.get("currentRunId", "manual")
+# `or "manual"` (NOT dict.get default): currentRunId may be present-but-None in an
+# interactive run, and get(key, default) only returns default when the key is ABSENT.
+load_id = notebookutils.runtime.context.get("currentRunId") or "manual"
 df_bronze = df_raw.with_columns(
     pl.lit(datetime.now(timezone.utc)).alias("_load_timestamp"),
-    pl.lit(source_path).alias("_source_file"),   # resolved source path literal
-    pl.lit(load_id).alias("_load_id"),
+    # dtype=pl.Utf8 is REQUIRED: an untyped pl.lit(None) (e.g. an OData/API source
+    # with no file path, or a null run id) becomes a polars Null dtype → Arrow null,
+    # which delta-rs rejects with "SchemaMismatchError: Invalid data type ... Null".
+    pl.lit(source_path, dtype=pl.Utf8).alias("_source_file"),   # resolved source path literal
+    pl.lit(load_id, dtype=pl.Utf8).alias("_load_id"),
 )
 ```
 

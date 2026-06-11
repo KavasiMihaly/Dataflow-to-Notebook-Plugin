@@ -252,6 +252,37 @@ def test_bronze_python_run_cell_is_pure() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Test 3e — metadata literals are typed + run id coerced (#20)
+# --------------------------------------------------------------------------- #
+def test_bronze_python_metadata_no_null_dtype() -> None:
+    """#20 — an untyped pl.lit(None) yields a polars Null dtype -> Arrow null,
+    which delta-rs rejects (SchemaMismatchError: Invalid data type ... Null).
+    The string metadata lits MUST carry dtype=pl.Utf8, and the run id MUST be
+    coerced with `or "manual"` (not get(key, "manual"), which still returns None
+    when currentRunId is present-but-None)."""
+    if not PY_BRONZE.is_file():
+        _check("Python bronze metadata lits are typed Utf8 + run id coerced", False,
+               detail="missing golden")
+        return
+    src = _code_source(_load_ipynb(PY_BRONZE))
+    source_file_typed = re.search(
+        r'pl\.lit\(\s*source_\w+\s*,\s*dtype\s*=\s*pl\.Utf8\s*\)\.alias\(\s*["\']_source_file["\']\)', src
+    ) is not None
+    load_id_typed = re.search(
+        r'pl\.lit\(\s*load_id\s*,\s*dtype\s*=\s*pl\.Utf8\s*\)\.alias\(\s*["\']_load_id["\']\)', src
+    ) is not None
+    run_id_coerced = re.search(r'currentRunId["\']\s*\)\s*or\s*["\']manual["\']', src) is not None
+    # The buggy dict.get default form must be gone.
+    no_get_default = re.search(r'get\(\s*["\']currentRunId["\']\s*,\s*["\']manual["\']\s*\)', src) is None
+    _check(
+        "Python bronze metadata lits are typed Utf8 + run id coerced (no Null dtype)",
+        source_file_typed and load_id_typed and run_id_coerced and no_get_default,
+        detail=f"source_file_typed={source_file_typed} load_id_typed={load_id_typed} "
+               f"run_id_coerced={run_id_coerced} no_get_default={no_get_default}",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Test 4 — metadata columns
 # --------------------------------------------------------------------------- #
 def test_bronze_python_metadata_columns() -> None:
@@ -398,6 +429,7 @@ def main() -> int:
     test_bronze_python_append_via_variable()
     test_bronze_python_write_has_delta_kwargs_shim()
     test_bronze_python_run_cell_is_pure()
+    test_bronze_python_metadata_no_null_dtype()
     test_bronze_python_metadata_columns()
     test_bronze_python_uses_table_path()
     test_bronze_python_passes_structure_hook()

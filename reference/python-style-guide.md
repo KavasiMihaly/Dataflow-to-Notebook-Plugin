@@ -87,10 +87,25 @@ and are **unaffected** — keep using them for tables.
 
 - `_load_timestamp` → `pl.lit(datetime.now(timezone.utc)).alias("_load_timestamp")`
   (a literal column — there is no per-row `current_timestamp()` UDF needed).
-- `_source_file` → the **source path literal** (single-node has no per-row
-  `input_file_name()`; pass the resolved file path string).
-- `_load_id` → `notebookutils.runtime.context.get("currentRunId", "manual")`
-  — **same idiom as PySpark**; `notebookutils.runtime.context` works in Python.
+- `_source_file` → the **source path literal**, typed:
+  `pl.lit(source_file, dtype=pl.Utf8).alias("_source_file")` (single-node has no
+  per-row `input_file_name()`; pass the resolved file path string).
+- `_load_id` → coerce the run id, then type the literal:
+  ```python
+  load_id = notebookutils.runtime.context.get("currentRunId") or "manual"
+  pl.lit(load_id, dtype=pl.Utf8).alias("_load_id")
+  ```
+
+> **`dtype=pl.Utf8` on the string literals is mandatory, and use `or "manual"` —
+> not a `dict.get` default.** `currentRunId` can be **present-but-None** in an
+> interactive run, and `get(key, default)` only returns the default when the key
+> is *absent*, so `get("currentRunId", "manual")` still yields `None`. Likewise
+> `_source_file` is `None` for sources with no file path (OData / API). An
+> **untyped `pl.lit(None)` produces a polars `Null` dtype → Arrow `null` type**,
+> which delta-rs rejects on write: `SchemaMismatchError: Invalid data type for
+> Delta Lake: Null`. Typing the literal forces a concrete `String` column even
+> when the value is `None`. (PySpark is unaffected — `F.lit` + Spark writes
+> tolerate it differently.)
 
 ## Secrets & connections
 
