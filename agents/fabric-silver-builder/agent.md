@@ -146,7 +146,7 @@ Every silver notebook follows this exact cell layout:
 
 | Cell | Purpose | Content |
 |------|---------|---------|
-| 0 | %run config | `%run utilities/nb_utils_config` |
+| 0 | %run config | `%run nb_utils_config` (bare item name, not a repo path) |
 | 1 | Configuration | `TABLE_NAME`, `BRONZE_SOURCE` |
 | 2 | Read Bronze | `df_raw = read_bronze("source_name")` |
 | 3+ | Transform | Rename, cast, clean, dedup (one or more cells) |
@@ -187,9 +187,9 @@ Every silver notebook follows this exact cell layout:
 
 ### Cell Templates
 
-**Cell 0 — %run utility config**:
+**Cell 0 — %run utility config** (bare notebook-item name — **never** a repo path like `utilities/nb_utils_config`; Fabric `%run` resolves by workspace item name and deploys land notebooks as flat items, so a path-style target yields `NameError` on the helpers):
 ```json
-{"cell_type": "code", "source": ["%run utilities/nb_utils_config"], "metadata": {}, "outputs": [], "execution_count": null}
+{"cell_type": "code", "source": ["%run nb_utils_config"], "metadata": {}, "outputs": [], "execution_count": null}
 ```
 
 **Cell 1 — Configuration**:
@@ -365,7 +365,7 @@ at deploy time).
 
 | Cell | Purpose | Content |
 |------|---------|---------|
-| 0 | %run config | `%run utilities/nb_utils_config` (works in Python notebooks — `nb_utils_config` is a **notebook item**, not a `.py` module) |
+| 0 | %run config | `%run nb_utils_config` (bare item name — works in Python notebooks; `nb_utils_config` is a **notebook item**, not a `.py` module or repo path) |
 | 1 | Imports | `import polars as pl` / `from deltalake import write_deltalake` |
 | 2 | Configuration | `TABLE_NAME = silver_table("<entity>")`, `BRONZE_SOURCE = "<source>"` |
 | 3 | Read Bronze | `df_raw = read_bronze(BRONZE_SOURCE)` — the ONLY read path |
@@ -567,7 +567,7 @@ Your silver notebook is complete when:
 - Multiple cells in `cells` array (one per logical section)
 - Each cell's `source` is `List[str]` (array of line strings)
 - Lakehouse binding set to `lh_silver` in `metadata.dependencies.lakehouse`
-- `%run utilities/nb_utils_config` cell present
+- `%run nb_utils_config` cell present (bare item name — not `utilities/nb_utils_config`)
 - Data read via `read_bronze()` — no external sources
 - Columns renamed to snake_case
 - Types cast appropriately

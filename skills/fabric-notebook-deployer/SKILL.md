@@ -47,6 +47,29 @@ python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-notebook-deployer/scripts/deploy_not
 
 If `--folder-id` is set, each deployed notebook is moved to that folder after creation.
 
+### Lakehouse binding at deploy time
+
+Generated notebooks carry the *name* of their lakehouse (e.g. `lh_bronze`) but a
+**placeholder GUID** — the builders have no workspace access, so they cannot fill
+in a real `default_lakehouse` id. Deploying as-is leaves the notebook pointing at
+a non-existent lakehouse. `--resolve-lakehouse` fixes this: for each notebook it
+looks up the lakehouse named in `metadata.dependencies.lakehouse.default_lakehouse_name`
+within the target workspace, then stamps in the real lakehouse GUID and the
+workspace GUID before deploying.
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-notebook-deployer/scripts/deploy_notebooks.py" \
+  --workspace "Analytics Dev" \
+  --pattern "3 - Notebooks/**/*.ipynb" \
+  --resolve-lakehouse
+```
+
+If the notebooks still carry placeholder *names* (e.g. `<bronze-lakehouse-name>`),
+force a specific lakehouse with `--lakehouse-name "lh_bronze"` (resolved in the
+target workspace) or `--lakehouse-id "<GUID>"` (used verbatim, no lookup). Either
+flag implies `--resolve-lakehouse`. A notebook whose lakehouse cannot be resolved
+is recorded as `failed` and skipped (never deployed with a broken binding).
+
 ### JSON output
 
 ```bash
@@ -82,6 +105,9 @@ Outputs a single JSON object summarizing the run:
 | `--retry-count` | no | Retries on rate-limit errors (default 3) |
 | `--retry-wait` | no | Seconds between retries (default 5) |
 | `--name-from` | no | `filename` (default — strip .ipynb) or `metadata-title` (read from notebook metadata) |
+| `--resolve-lakehouse` | no | Resolve each notebook's lakehouse name to a real GUID in the target workspace and stamp in the workspace id (fixes placeholder/zero GUIDs) |
+| `--lakehouse-name` | no | Override lakehouse display name to bind for every notebook (implies `--resolve-lakehouse`) |
+| `--lakehouse-id` | no | Bind this exact lakehouse GUID for every notebook, skipping lookup (implies `--resolve-lakehouse`) |
 
 ## Authentication
 
@@ -97,7 +123,7 @@ The skill inherits authentication from the `fab` CLI. Either:
 3. **Deploy** — for each valid notebook:
    - Read .ipynb content, base64-encode the JSON
    - Build the Fabric API payload (`{ "displayName": ..., "definition": { "parts": [...] } }`)
-   - POST via `fab api` to `/v1/workspaces/<workspace>/notebooks`
+   - POST via `fab api` to `workspaces/<workspace>/notebooks` (fab >= 1.6 prepends the base+version URL itself — no `/v1/` prefix, lowercase method)
    - On success, record the new notebook's ID
    - On rate limit (HTTP 429), retry up to `--retry-count` times
    - On other errors, record and continue (do not halt the batch)

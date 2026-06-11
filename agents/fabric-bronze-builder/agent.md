@@ -245,7 +245,7 @@ no `import pyspark` / `from pyspark`, no `.withColumn(...)`. There is no `F` and
 | Cell | Purpose | Content |
 |------|---------|---------|
 | Header | markdown | name, purpose, engine: python, source, target (append-only) |
-| 1 | Shared helpers | `%run utilities/nb_utils_config` (gives `table_path`, `add_bronze_metadata`, `validate_row_count`) |
+| 1 | Shared helpers | `%run nb_utils_config` (gives `table_path`, `add_bronze_metadata`, `validate_row_count`) — **bare notebook-item name, never a repo path** like `utilities/nb_utils_config`; Fabric `%run` resolves by workspace item name, and deploys land notebooks as flat items |
 | 2 | Imports | `os`, `glob`, `datetime`/`timezone`, `polars as pl`, `from deltalake import write_deltalake`, `notebookutils` |
 | 3 | Parameters | `source_name`, `source_format`, mount `source_path`, `load_mode = "append"` |
 | 4 | Read source | glob the mount + `pl.read_csv`/`read_parquet`/`read_ndjson`; assert files found |

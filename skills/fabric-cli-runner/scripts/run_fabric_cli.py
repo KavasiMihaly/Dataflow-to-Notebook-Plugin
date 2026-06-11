@@ -14,7 +14,7 @@ Examples:
     python run_fabric_cli.py job run-status MyWorkspace/nb_bronze.Notebook --run-id <id>
     python run_fabric_cli.py cp local.csv MyWorkspace/lakehouse.Lakehouse/Files/
     python run_fabric_cli.py rm MyWorkspace/nb_old.Notebook -f
-    python run_fabric_cli.py api get /v1/workspaces
+    python run_fabric_cli.py api get workspaces   # fab >= 1.6: lowercase method, no /v1/ prefix
 """
 
 import sys
@@ -161,7 +161,7 @@ def main():
         print("  python run_fabric_cli.py rm MyWorkspace/nb_old.Notebook -f")
         print("")
         print("API:")
-        print("  python run_fabric_cli.py api get /v1/workspaces")
+        print("  python run_fabric_cli.py api get workspaces   # fab >= 1.6: no /v1/ prefix")
         return 1
 
     # Check fab is installed

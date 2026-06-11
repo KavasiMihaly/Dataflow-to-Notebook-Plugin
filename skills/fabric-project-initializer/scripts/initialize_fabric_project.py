@@ -92,7 +92,7 @@ def create_utility_notebook(target_path: Path, config: dict) -> None:
     """Create starter utility notebook in 3 - Notebooks/utilities/."""
     utility_content = f'''# Notebook: nb_utils_config
 # Purpose: Shared configuration and utility functions for {config["display_name"]}
-# Usage: %run utilities/nb_utils_config
+# Usage: %run nb_utils_config   (bare notebook-item name, not a repo path)
 
 # --- Project Configuration ---
 PROJECT_NAME = "{config["display_name"]}"

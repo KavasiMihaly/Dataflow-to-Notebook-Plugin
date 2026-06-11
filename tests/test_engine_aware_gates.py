@@ -147,7 +147,7 @@ def _blocked(decision: dict) -> bool:
 def test_hook_pyspark_silver_unchanged() -> None:
     # (a) A clean PySpark silver (read_bronze only) is allowed.
     ok_nb = _make_nb("pyspark", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = read_bronze("customers")',
         'df.write.format("delta").mode("overwrite").saveAsTable("silver_customers")',
     ])
@@ -155,14 +155,14 @@ def test_hook_pyspark_silver_unchanged() -> None:
 
     # (b) A PySpark silver with a forbidden external read is still blocked.
     bad_nb = _make_nb("pyspark", [
-        '%run utilities/nb_utils_config',
+        '%run nb_utils_config',
         'df = spark.read.csv("Files/raw/x.csv")',
     ])
     bad = _run_hook("p/3 - Notebooks/silver/nb_silver_x.ipynb", bad_nb)
 
     # (c) A PySpark silver missing read_bronze is still blocked.
     missing_nb = _make_nb("pyspark", [
-        '%run utilities/nb_utils_config',
+        '%run nb_utils_config',
         'df = something_else()',
     ])
     missing = _run_hook("p/3 - Notebooks/silver/nb_silver_y.ipynb", missing_nb)
@@ -181,7 +181,7 @@ def test_hook_pyspark_silver_unchanged() -> None:
 def test_hook_python_silver_external_read_blocked() -> None:
     # pl.read_csv external read
     nb_csv = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = read_bronze("customers")',
         'extra = pl.read_csv("/lakehouse/default/Files/raw/x.csv")',
     ])
@@ -189,7 +189,7 @@ def test_hook_python_silver_external_read_blocked() -> None:
 
     # os.walk of raw mount
     nb_walk = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = read_bronze("customers")',
         'for root, _, files in os.walk("/lakehouse/default/Files/raw"):\n    pass',
     ])
@@ -197,7 +197,7 @@ def test_hook_python_silver_external_read_blocked() -> None:
 
     # bare pl.read_delta of an external path (bypasses read_bronze)
     nb_delta = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = read_bronze("customers")',
         'leak = pl.read_delta("abfss://x@y.dfs.core.windows.net/Tables/z")',
     ])
@@ -216,7 +216,7 @@ def test_hook_python_silver_external_read_blocked() -> None:
 # --------------------------------------------------------------------------- #
 def test_hook_python_silver_read_bronze_ok() -> None:
     nb = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         "import polars as pl\nfrom deltalake import write_deltalake",
         'df = read_bronze("customers")',
         'df2 = df.rename({"A": "a"}).with_columns(pl.col("a").cast(pl.Int64))',
@@ -237,7 +237,7 @@ def test_hook_python_silver_read_bronze_ok() -> None:
 # --------------------------------------------------------------------------- #
 def test_hook_python_bronze_external_read_ok() -> None:
     nb = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         "import os, glob\nimport polars as pl\nfrom deltalake import write_deltalake",
         'files = sorted(glob.glob("/lakehouse/default/Files/raw/customers/*.csv"))',
         'df = pl.concat([pl.read_csv(f) for f in files], how="diagonal_relaxed")',
@@ -324,7 +324,7 @@ def in_python_rowcount(text: str) -> str:
 def test_cross_engine_leak_spark_in_python() -> None:
     # spark.read in a Python bronze
     nb_spark = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = spark.read.csv("Files/raw/x.csv")',
         'write_deltalake(table_path("bronze_x"), df, mode="append", schema_mode="merge")',
     ])
@@ -332,7 +332,7 @@ def test_cross_engine_leak_spark_in_python() -> None:
 
     # F.col in a Python silver
     nb_f = _make_nb("python", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = read_bronze("customers")',
         'df2 = df.withColumn("y", F.col("x"))',
         'write_deltalake(table_path("silver_x"), df2, mode="overwrite", schema_mode="overwrite")',
@@ -352,7 +352,7 @@ def test_cross_engine_leak_spark_in_python() -> None:
 def test_cross_engine_leak_python_in_pyspark() -> None:
     # write_deltalake (delta-rs) inside a PySpark bronze — wrong engine idiom.
     nb = _make_nb("pyspark", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         'df = spark.createDataFrame([])',
         'write_deltalake(table_path("bronze_x"), df, mode="append", schema_mode="merge")',
     ])
@@ -360,7 +360,7 @@ def test_cross_engine_leak_python_in_pyspark() -> None:
 
     # import polars inside a PySpark notebook — also a leak.
     nb2 = _make_nb("pyspark", [
-        "%run utilities/nb_utils_config",
+        "%run nb_utils_config",
         "import polars as pl",
         'df = read_bronze("customers")',
         'df.write.format("delta").mode("overwrite").saveAsTable("silver_x")',

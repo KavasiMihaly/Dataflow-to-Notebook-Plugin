@@ -82,7 +82,7 @@ class PolarsGenerator:
             "# notebook layer and sets the real write mode (bronze=append+merge,",
             "# silver=overwrite+overwrite). The write block below is a default.",
             "# table_path() and read_bronze() are provided by the utilities notebook,",
-            "# imported at the top of a real notebook via: %run utilities/nb_utils_config",
+            "# imported at the top of a real notebook via: %run nb_utils_config",
             "# Review and adjust connection details and business logic before use.",
         ]
         return "\n".join(l for l in lines if l is not None)

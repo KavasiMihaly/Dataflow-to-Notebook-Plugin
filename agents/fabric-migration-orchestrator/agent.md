@@ -587,7 +587,7 @@ Task(
 
   Write '3 - Notebooks/silver/nb_silver_<query_snake>.ipynb' as valid Jupyter JSON with lh_silver lakehouse binding:
   - engine=pyspark → synapse_pyspark kernel; existing PySpark idioms.
-  - engine=python → jupyter kernel (jupyter_python); %run utilities/nb_utils_config; df = read_bronze('<src>'); polars transforms; drop bronze metadata then add_silver_metadata; write via write_deltalake(table_path(...), arrow, mode='overwrite', schema_mode='overwrite').
+  - engine=python → jupyter kernel (jupyter_python); %run nb_utils_config (bare item name, not a repo path); df = read_bronze('<src>'); polars transforms; drop bronze metadata then add_silver_metadata; write via write_deltalake(table_path(...), arrow, mode='overwrite', schema_mode='overwrite').
 
   Include this JSON envelope as the LAST block of your chat response, formatted as a fenced ```json``` block: { status, notebook_path, conforms_to_plan, deviations, warnings, errors, bronze_sources_used: [...], read_bronze_only: bool }. DO NOT write the envelope (or any other report/notes file) to disk — the orchestrator parses it from your chat response. DO NOT create any files outside the single notebook_path specified above. DO NOT write to '1 - Documentation/' (orchestrator-owned). DO NOT invent new top-level directories.",
   run_in_background: true,
@@ -606,8 +606,10 @@ If `--dry-run`: log "Stage 10 SKIPPED — dry-run mode" and proceed to Stage 11.
 Else atomic call per notebook (sequential, since Fabric API has rate limits):
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-notebook-deployer/scripts/deploy_notebooks.py" --workspace "<name>" --pattern "3 - Notebooks/**/*.ipynb"
+python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-notebook-deployer/scripts/deploy_notebooks.py" --workspace "<name>" --pattern "3 - Notebooks/**/*.ipynb" --resolve-lakehouse
 ```
+
+Pass `--resolve-lakehouse` so each notebook's placeholder lakehouse GUID is replaced with the real GUID of the lakehouse (looked up by name in the target workspace) at deploy time — without it, deployed notebooks point at a non-existent lakehouse and every run fails. The deployer reads each notebook's `default_lakehouse_name` (which the builders set from `bronze_lakehouse` / `silver_lakehouse` userConfig); ensure those lakehouses exist in the workspace first (Stage 0 pre-flight).
 
 Capture exit code. Non-zero → halt with error context.
 

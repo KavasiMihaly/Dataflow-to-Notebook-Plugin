@@ -133,7 +133,8 @@ python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-cli-runner/scripts/run_fabric_cli.py
 ### Direct API Calls
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-cli-runner/scripts/run_fabric_cli.py" api get /v1/workspaces
+# fab >= 1.6: lowercase method, and NO /v1/ prefix (fab prepends the base+version URL)
+python "${CLAUDE_PLUGIN_ROOT}/skills/fabric-cli-runner/scripts/run_fabric_cli.py" api get workspaces
 ```
 
 ### List Workspaces

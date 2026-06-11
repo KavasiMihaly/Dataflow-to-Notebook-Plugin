@@ -46,50 +46,120 @@ def _load_plugin_userconfig_env():
 _load_plugin_userconfig_env()
 
 
-def fab_api(method: str, path: str, body: dict = None, timeout: int = 120) -> tuple[int, str, str]:
-    """Invoke `fab api` with given method, path, and optional body. Returns (rc, stdout, stderr)."""
-    cmd = ["fab", "api", "-X", method, path]
+def fab_api(method: str, path: str, body: dict = None, timeout: int = 120) -> tuple[int, int, dict, str]:
+    """Invoke `fab api` with given method, path, and optional body.
+
+    Returns (rc, status_code, data, err) where:
+      - rc          : the `fab` process exit code
+      - status_code : the HTTP status from the response envelope (0 if unparseable)
+      - data        : the unwrapped response payload (the envelope's "text", or {})
+      - err         : stderr / parse-error string ("" on clean success)
+
+    Compatible with fab (ms-fabric-cli) >= 1.6, which:
+      * only accepts lowercase HTTP methods (get/post/patch/...),
+      * prepends the Fabric base+version URL itself, so paths must NOT carry "/v1/",
+      * wraps every response in {"status_code": <int>, "text": <payload>},
+      * returns exit code 0 even for HTTP 4xx/5xx (error lives in the envelope).
+    """
+    # fab 1.6+ rejects uppercase methods: "invalid choice: 'GET'".
+    cmd = ["fab", "api", "-X", method.lower(), path]
     if body is not None:
         cmd.extend(["-i", json.dumps(body)])
+    # On a cp1252 Windows console, fab crashes printing non-ASCII (e.g. "✓"/"→").
+    # Force UTF-8 in the child so it can emit its output without a charmap crash.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, result.stdout, result.stderr
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
-        return 124, "", "fab api call timed out"
+        return 124, 0, {}, "fab api call timed out"
     except FileNotFoundError:
-        return 127, "", "fab CLI not found on PATH; run: pip install ms-fabric-cli"
+        return 127, 0, {}, "fab CLI not found on PATH; run: pip install ms-fabric-cli"
+
+    if result.returncode != 0 and not result.stdout.strip():
+        return result.returncode, 0, {}, (result.stderr or "").strip()
+
+    try:
+        resp = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        # Some commands print plain text; surface it as-is with an unknown status.
+        return result.returncode, 0, {}, (result.stderr or result.stdout or "").strip()
+
+    if isinstance(resp, dict) and "status_code" in resp:
+        status = resp.get("status_code", 0)
+        data = resp.get("text", {})
+    else:
+        # Older fab versions returned the payload directly, with no envelope.
+        status = 200
+        data = resp
+    if not isinstance(data, dict):
+        data = {"value": data} if isinstance(data, list) else {"raw": data}
+    err = "" if 200 <= status < 300 else json.dumps(data)[:300]
+    return result.returncode, status, data, err
 
 
 def get_workspace_id(workspace_name: str) -> str | None:
     """Look up workspace GUID by display name."""
-    rc, out, err = fab_api("GET", f"/v1/workspaces?displayName={workspace_name}")
-    if rc != 0:
+    # fab 1.6 ignores ?displayName= filtering reliably, so list all and match locally.
+    rc, status, data, err = fab_api("GET", "workspaces")
+    if not (200 <= status < 300):
         return None
-    try:
-        data = json.loads(out)
-        items = data.get("value", []) if isinstance(data, dict) else []
-        for item in items:
-            if item.get("displayName") == workspace_name:
-                return item.get("id")
-    except json.JSONDecodeError:
-        pass
+    items = data.get("value", []) if isinstance(data, dict) else []
+    for item in items:
+        if item.get("displayName") == workspace_name:
+            return item.get("id")
     return None
 
 
-def deploy_notebook(workspace_id: str, notebook_path: Path, name: str, retry_count: int, retry_wait: int) -> tuple[str | None, str]:
-    """Deploy one notebook. Returns (notebook_id_or_None, error_or_empty)."""
-    try:
-        with notebook_path.open("r", encoding="utf-8") as f:
-            content = f.read()
-        # Validate JSON
-        parsed = json.loads(content)
-        if not isinstance(parsed, dict) or "cells" not in parsed:
-            return None, f"Not a valid Jupyter notebook (missing cells)"
-    except json.JSONDecodeError as e:
-        return None, f"Invalid JSON: {e}"
-    except Exception as e:
-        return None, f"Read error: {e}"
+def get_lakehouse_id(workspace_id: str, lakehouse_name: str, cache: dict) -> str | None:
+    """Resolve a lakehouse GUID by display name within a workspace (cached per run)."""
+    key = (workspace_id, lakehouse_name)
+    if key in cache:
+        return cache[key]
+    rc, status, data, err = fab_api("GET", f"workspaces/{workspace_id}/items?type=Lakehouse")
+    result = None
+    if 200 <= status < 300:
+        for item in (data.get("value", []) if isinstance(data, dict) else []):
+            if item.get("displayName") == lakehouse_name:
+                result = item.get("id")
+                break
+    cache[key] = result
+    return result
 
+
+def _is_placeholder(value: str | None) -> bool:
+    """A templated, not-yet-resolved value such as '<bronze-lakehouse-name>' or a zero GUID."""
+    if not value:
+        return True
+    return value.startswith("<") or set(value) <= {"0", "-"}
+
+
+def bind_lakehouse(nb: dict, workspace_id: str, name_override: str | None,
+                   id_override: str | None, cache: dict) -> tuple[bool, str]:
+    """Rewrite nb['metadata']['dependencies']['lakehouse'] to point at a real lakehouse
+    in the target workspace. Mutates nb in place. Returns (changed, note)."""
+    block = nb.get("metadata", {}).get("dependencies", {}).get("lakehouse")
+    if not isinstance(block, dict):
+        return False, "no lakehouse dependency to bind"
+
+    name = name_override or block.get("default_lakehouse_name")
+    if id_override:
+        lh_id = id_override
+    else:
+        if _is_placeholder(name):
+            return False, f"unresolved lakehouse placeholder name '{name}' (pass --lakehouse-name)"
+        lh_id = get_lakehouse_id(workspace_id, name, cache)
+        if not lh_id:
+            return False, f"lakehouse '{name}' not found in target workspace"
+
+    block["default_lakehouse"] = lh_id
+    block["known_lakehouses"] = [{"id": lh_id}]
+    block["default_lakehouse_name"] = name
+    block["default_lakehouse_workspace_id"] = workspace_id
+    return True, f"bound '{name}' -> {lh_id}"
+
+
+def deploy_notebook(workspace_id: str, content: str, name: str, retry_count: int, retry_wait: int) -> tuple[str | None, str]:
+    """Deploy one notebook from its JSON content string. Returns (notebook_id_or_None, error_or_empty)."""
     payload_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
     body = {
         "displayName": name,
@@ -105,29 +175,26 @@ def deploy_notebook(workspace_id: str, notebook_path: Path, name: str, retry_cou
     }
 
     for attempt in range(retry_count + 1):
-        rc, out, err = fab_api("POST", f"/v1/workspaces/{workspace_id}/notebooks", body=body)
-        if rc == 0:
-            try:
-                data = json.loads(out)
-                return data.get("id"), ""
-            except json.JSONDecodeError:
-                return None, f"Deployed but response not parseable: {out[:200]}"
-        # Rate limit retry
-        if "429" in (err or "") or "throttl" in (err or "").lower():
+        rc, status, data, err = fab_api("POST", f"workspaces/{workspace_id}/notebooks", body=body)
+        if 200 <= status < 300:
+            # 201 returns the created item; 202 (LRO accepted) may have no id yet.
+            return data.get("id") or data.get("displayName") or name, ""
+        # Rate limit retry (429 surfaces in the envelope status on fab 1.6+).
+        if status == 429 or "429" in (err or "") or "throttl" in (err or "").lower():
             if attempt < retry_count:
                 time.sleep(retry_wait)
                 continue
-        return None, (err or out or "unknown error").strip()
+        return None, (err or "unknown error").strip()
     return None, "exhausted retries"
 
 
 def move_to_folder(workspace_id: str, notebook_id: str, folder_id: str) -> str:
     """Move notebook to a folder. Returns error_or_empty."""
     body = {"folderId": folder_id}
-    rc, out, err = fab_api("PATCH", f"/v1/workspaces/{workspace_id}/notebooks/{notebook_id}", body=body)
-    if rc == 0:
+    rc, status, data, err = fab_api("PATCH", f"workspaces/{workspace_id}/notebooks/{notebook_id}", body=body)
+    if 200 <= status < 300:
         return ""
-    return (err or out or "unknown move error").strip()
+    return (err or "unknown move error").strip()
 
 
 def main():
@@ -145,7 +212,27 @@ def main():
         default="filename",
         help="How to derive the displayName for each notebook",
     )
+    parser.add_argument(
+        "--resolve-lakehouse",
+        action="store_true",
+        help="At deploy time, resolve each notebook's lakehouse name to a real GUID in the "
+             "target workspace and stamp in the workspace id (fixes placeholder/zero GUIDs).",
+    )
+    parser.add_argument(
+        "--lakehouse-name",
+        default=None,
+        help="Override the lakehouse display name to bind for every notebook (implies "
+             "--resolve-lakehouse). Use when notebooks still carry placeholder names.",
+    )
+    parser.add_argument(
+        "--lakehouse-id",
+        default=None,
+        help="Bind this exact lakehouse GUID for every notebook (implies --resolve-lakehouse; "
+             "skips the workspace lookup).",
+    )
     args = parser.parse_args()
+
+    bind_enabled = args.resolve_lakehouse or bool(args.lakehouse_name) or bool(args.lakehouse_id)
 
     files = sorted(globlib.glob(args.pattern, recursive=True))
     files = [f for f in files if f.endswith(".ipynb")]
@@ -189,41 +276,62 @@ def main():
     deployed = []
     skipped = []
     failed = []
+    lakehouse_cache = {}
 
     for f in files:
         path = Path(f)
+        # Read + parse the notebook once; used for name derivation, validation, and binding.
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                nb = json.load(fh)
+            if not isinstance(nb, dict) or "cells" not in nb:
+                raise ValueError("not a valid Jupyter notebook (missing cells)")
+        except Exception as e:
+            failed.append({"path": str(path), "error": f"Invalid JSON: {e}"})
+            if not args.json:
+                tag = "[DRY-RUN] FAIL" if args.dry_run else "FAILED"
+                print(f"{tag} {path}: {e}")
+            continue
+
         if args.name_from == "filename":
             name = path.stem
         else:
-            try:
-                with path.open("r", encoding="utf-8") as fh:
-                    nb = json.load(fh)
-                name = nb.get("metadata", {}).get("title") or path.stem
-            except Exception:
-                name = path.stem
+            name = nb.get("metadata", {}).get("title") or path.stem
 
         if args.dry_run:
-            try:
-                with path.open("r", encoding="utf-8") as fh:
-                    json.load(fh)
-                deployed.append({"path": str(path), "name": name, "notebook_id": None, "mode": "dry-run-validated"})
-                if not args.json:
-                    print(f"[DRY-RUN] OK  {path}")
-            except Exception as e:
-                failed.append({"path": str(path), "error": f"Invalid JSON: {e}"})
-                if not args.json:
-                    print(f"[DRY-RUN] FAIL {path}: {e}")
+            note = ""
+            if bind_enabled:
+                block = nb.get("metadata", {}).get("dependencies", {}).get("lakehouse")
+                lh_name = args.lakehouse_name or (block.get("default_lakehouse_name") if isinstance(block, dict) else None)
+                note = f" (would bind lakehouse '{lh_name}')" if (block or args.lakehouse_id) else " (no lakehouse to bind)"
+            deployed.append({"path": str(path), "name": name, "notebook_id": None, "mode": "dry-run-validated"})
+            if not args.json:
+                print(f"[DRY-RUN] OK  {path}{note}")
             continue
 
-        notebook_id, err = deploy_notebook(workspace_id, path, name, args.retry_count, args.retry_wait)
+        bind_note = ""
+        if bind_enabled:
+            changed, bind_note = bind_lakehouse(
+                nb, workspace_id, args.lakehouse_name, args.lakehouse_id, lakehouse_cache)
+            if not changed and ("not found" in bind_note or "placeholder" in bind_note):
+                failed.append({"path": str(path), "error": f"Lakehouse binding failed: {bind_note}"})
+                if not args.json:
+                    print(f"FAILED {name}: lakehouse binding — {bind_note}")
+                continue
+
+        content = json.dumps(nb)
+        notebook_id, err = deploy_notebook(workspace_id, content, name, args.retry_count, args.retry_wait)
         if notebook_id:
             entry = {"path": str(path), "name": name, "notebook_id": notebook_id}
+            if bind_note:
+                entry["lakehouse_binding"] = bind_note
             if args.folder_id:
                 move_err = move_to_folder(workspace_id, notebook_id, args.folder_id)
                 entry["folder_move_error"] = move_err if move_err else None
             deployed.append(entry)
             if not args.json:
-                print(f"DEPLOYED {name} -> {notebook_id}")
+                suffix = f"  [{bind_note}]" if bind_note else ""
+                print(f"DEPLOYED {name} -> {notebook_id}{suffix}")
         else:
             failed.append({"path": str(path), "error": err})
             if not args.json:
